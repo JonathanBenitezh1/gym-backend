@@ -46,6 +46,7 @@ export const registro = async (req, res) => {
     console.error(error)
     res.status(500).json({ error: 'Error en el servidor' })
   }
+  console.log('Body recibido:', req.body)
 }
 export const login = async (req, res) => {
   const { email, password } = req.body
