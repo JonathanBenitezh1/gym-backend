@@ -23,20 +23,59 @@ export const editarClase = async (req, res) => {
   const { id } = req.params
   const { nombre, rama, profesor_id, descripcion, duracion, activo } = req.body
 
+  const client = await pool.connect()
+
   try {
-    const resultado = await pool.query(
+    await client.query('BEGIN')
+
+    const resultado = await client.query(
       `UPDATE clases SET nombre=$1, rama=$2, profesor_id=$3,
        descripcion=$4, duracion=$5, activo=$6
        WHERE id=$7 RETURNING *`,
       [nombre, rama, profesor_id, descripcion, duracion, activo, id]
     )
+
+    // Si se desactiva la clase, cancelar reservas pendientes y devolver cupos
+    if (!activo) {
+      // Obtenemos las reservas pendientes de esta clase
+      const reservasPendientes = await client.query(
+        `SELECT r.id, r.horario_id FROM reservas r
+         JOIN horarios h ON r.horario_id = h.id
+         WHERE h.clase_id = $1 AND r.estado = 'pendiente'`,
+        [id]
+      )
+
+      for (const reserva of reservasPendientes.rows) {
+        // Devolvemos el cupo
+        await client.query(
+          `UPDATE horarios SET cupos_disponibles = cupos_disponibles + 1
+           WHERE id = $1`,
+          [reserva.horario_id]
+        )
+        // Cancelamos la reserva
+        await client.query(
+          `UPDATE reservas SET estado = 'cancelado' WHERE id = $1`,
+          [reserva.id]
+        )
+      }
+    }
+
+    await client.query('COMMIT')
+
+    // Notificar a todos en tiempo real
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
+    if (!activo) {
+      io.emit('reserva_cancelada', { mensaje: 'Clase desactivada' })
+    }
+
     res.json(resultado.rows[0])
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     res.status(500).json({ error: 'Error al editar la clase' })
   }
 }
-
 export const eliminarClase = async (req, res) => {
   const { id } = req.params
   try {

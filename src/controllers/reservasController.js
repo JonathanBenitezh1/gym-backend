@@ -23,10 +23,22 @@ export const crearReserva = async (req, res) => {
       }
 
       const h = horario.rows[0]
+     
 
-      if (h.cupos_disponibles <= 0) {
-        throw new Error(`No hay cupos disponibles en uno de los horarios seleccionados`)
-      }
+// Verificar que el horario y la clase estén activos
+        const claseActiva = await client.query(
+          `SELECT c.activo FROM clases c
+          JOIN horarios h ON h.clase_id = c.id
+          WHERE h.id = $1`,
+          [horario_id]
+        )
+        if (!claseActiva.rows[0]?.activo || !h.activo) {
+          throw new Error(`Una de las clases seleccionadas ya no está disponible`)
+        }
+
+        if (h.cupos_disponibles <= 0) {
+          throw new Error(`No hay cupos disponibles en uno de los horarios seleccionados`)
+        }
 
       const precio = tipo === 'quincenal' ? h.precio * 2 : h.precio
       total += precio
