@@ -247,3 +247,27 @@ export const obtenerProfesores = async (req, res) => {
     res.status(500).json({ error: 'Error al obtener profesores' })
   }
 }
+export const verificarClaseAntesDeshabilitar = async (req, res) => {
+  const { id } = req.params
+  try {
+    const pagadas = await pool.query(
+      `SELECT COUNT(*) as total FROM reservas r
+       JOIN horarios h ON r.horario_id = h.id
+       WHERE h.clase_id = $1 AND r.estado = 'pagado'`,
+      [id]
+    )
+    const pendientes = await pool.query(
+      `SELECT COUNT(*) as total FROM reservas r
+       JOIN horarios h ON r.horario_id = h.id
+       WHERE h.clase_id = $1 AND r.estado = 'pendiente'`,
+      [id]
+    )
+    res.json({
+      pagadas: parseInt(pagadas.rows[0].total),
+      pendientes: parseInt(pendientes.rows[0].total)
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al verificar la clase' })
+  }
+}

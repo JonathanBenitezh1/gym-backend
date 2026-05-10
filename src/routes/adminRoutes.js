@@ -7,6 +7,7 @@ import {
   obtenerReservas, confirmarPagoEfectivo,
   obtenerProfesores 
 } from '../controllers/adminController.js'
+import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.js'
 
 const router = Router()
 
@@ -32,5 +33,5 @@ router.put('/usuarios/:id/rol', cambiarRol)
 // Reservas y pagos
 router.get('/reservas', obtenerReservas)
 router.put('/reservas/:id/confirmar-pago', confirmarPagoEfectivo)
-
+router.get('/clases/:id/verificar', verificarClaseAntesDeshabilitar)
 export default router

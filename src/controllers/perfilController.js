@@ -14,6 +14,36 @@ export const obtenerPerfil = async (req, res) => {
     res.status(500).json({ error: 'Error al obtener el perfil' })
   }
 }
+export const obtenerHistorialPagos = async (req, res) => {
+  const id = req.usuario.id
+  try {
+    const resultado = await pool.query(
+      `SELECT 
+        p.id,
+        p.monto,
+        p.metodo,
+        p.estado,
+        p.created_at,
+        c.nombre AS clase,
+        h.dia_semana,
+        h.hora_inicio,
+        r.tipo,
+        r.fecha_inicio,
+        r.fecha_fin
+       FROM pagos p
+       JOIN reservas r ON p.reserva_id = r.id
+       JOIN horarios h ON r.horario_id = h.id
+       JOIN clases c ON h.clase_id = c.id
+       WHERE r.usuario_id = $1
+       ORDER BY p.created_at DESC`,
+      [id]
+    )
+    res.json(resultado.rows)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al obtener el historial de pagos' })
+  }
+}
 
 export const editarPerfil = async (req, res) => {
   const id = req.usuario.id

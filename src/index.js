@@ -11,6 +11,7 @@ import reservasRoutes from './routes/reservasRoutes.js'
 import pagosRoutes from './routes/pagosRoutes.js'
 import profesorRoutes from './routes/profesorRoutes.js'
 import perfilRoutes from './routes/perfilRoutes.js'
+import asistenciaRoutes from './routes/asistenciaRoutes.js'
 
 dotenv.config()
 
@@ -34,6 +35,7 @@ app.use('/api/reservas', reservasRoutes)
 app.use('/api/pagos',    pagosRoutes)
 app.use('/api/profesor', profesorRoutes)
 app.use('/api/perfil', perfilRoutes)
+app.use('/api/asistencia', asistenciaRoutes)
 
 app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })

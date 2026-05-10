@@ -12,33 +12,54 @@ export const crearReserva = async (req, res) => {
     let total = 0
     const reservasCreadas = []
 
-    for (const horario_id of horarios_ids) {
-      const horario = await client.query(
-        'SELECT * FROM horarios WHERE id = $1 FOR UPDATE',
-        [horario_id]
-      )
+   for (const horario_id of horarios_ids) {
+  const horario = await client.query(
+    'SELECT * FROM horarios WHERE id = $1 FOR UPDATE',
+    [horario_id]
+  )
 
-      if (horario.rows.length === 0) {
-        throw new Error(`Horario ${horario_id} no encontrado`)
-      }
+  if (horario.rows.length === 0) {
+    throw new Error(`Horario ${horario_id} no encontrado`)
+  }
 
-      const h = horario.rows[0]
-     
+  const h = horario.rows[0]
 
-// Verificar que el horario y la clase estén activos
-        const claseActiva = await client.query(
-          `SELECT c.activo FROM clases c
-          JOIN horarios h ON h.clase_id = c.id
-          WHERE h.id = $1`,
-          [horario_id]
-        )
-        if (!claseActiva.rows[0]?.activo || !h.activo) {
-          throw new Error(`Una de las clases seleccionadas ya no está disponible`)
-        }
+  // ─── VERIFICACIÓN NUEVA ───
+  // Evitar reservar la misma clase en el mismo período
+  const reservaExistente = await client.query(
+    `SELECT r.id FROM reservas r
+     WHERE r.usuario_id = $1 
+     AND r.horario_id = $2
+     AND r.estado NOT IN ('cancelado')
+     AND (
+       (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
+       (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
+       (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
+     )`,
+    [usuario_id, horario_id, fecha_inicio, fecha_fin]
+  )
 
-        if (h.cupos_disponibles <= 0) {
-          throw new Error(`No hay cupos disponibles en uno de los horarios seleccionados`)
-        }
+  if (reservaExistente.rows.length > 0) {
+    throw new Error(`Ya tenés una reserva activa para esta clase en ese período`)
+  }
+  // ─────────────────────────
+
+  // Verificar que el horario y la clase estén activos
+  const claseActiva = await client.query(
+    `SELECT c.activo FROM clases c
+     JOIN horarios h ON h.clase_id = c.id
+     WHERE h.id = $1`,
+    [horario_id]
+  )
+  if (!claseActiva.rows[0]?.activo || !h.activo) {
+    throw new Error(`Una de las clases seleccionadas ya no está disponible`)
+  }
+
+  if (h.cupos_disponibles <= 0) {
+    throw new Error(`No hay cupos disponibles en uno de los horarios seleccionados`)
+  }
+
+  // ... resto del código existente
 
       const precio = tipo === 'quincenal' ? h.precio * 2 : h.precio
       total += precio
