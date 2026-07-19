@@ -15,15 +15,19 @@ import asistenciaRoutes from './routes/asistenciaRoutes.js'
 
 dotenv.config()
 
+// Origen permitido para CORS. En desarrollo apunta a Vite (localhost:5173);
+// en producción se define con la variable de entorno CORS_ORIGIN (la URL del frontend).
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173'
+
 const app    = express()
 const server = createServer(app)
 const io     = new Server(server, {
-  cors: { origin: 'http://localhost:5173' }
+  cors: { origin: CORS_ORIGIN }
 })
 
 const PORT = process.env.PORT || 3000
 
-app.use(cors({ origin: 'http://localhost:5173' }))
+app.use(cors({ origin: CORS_ORIGIN }))
 app.use(express.json())
 
 app.set('io', io)

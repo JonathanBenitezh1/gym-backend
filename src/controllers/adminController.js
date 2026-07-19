@@ -12,6 +12,8 @@ export const crearClase = async (req, res) => {
        RETURNING *`,
       [nombre, rama, profesor_id, descripcion, duracion]
     )
+    const io = req.app.get('io')
+      io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.status(201).json(resultado.rows[0])
   } catch (error) {
     console.error(error)
@@ -74,12 +76,16 @@ export const editarClase = async (req, res) => {
     await client.query('ROLLBACK')
     console.error(error)
     res.status(500).json({ error: 'Error al editar la clase' })
+  } finally {
+    client.release()
   }
 }
 export const eliminarClase = async (req, res) => {
   const { id } = req.params
   try {
     await pool.query('DELETE FROM clases WHERE id = $1', [id])
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.json({ mensaje: 'Clase eliminada correctamente' })
   } catch (error) {
     console.error(error)
@@ -116,6 +122,8 @@ export const crearHorario = async (req, res) => {
        RETURNING *`,
       [clase_id, dia_semana, hora_inicio, hora_fin, cupos_totales, precio]
     )
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
     res.status(201).json(resultado.rows[0])
   } catch (error) {
     console.error(error)
@@ -147,6 +155,8 @@ export const eliminarHorario = async (req, res) => {
   const { id } = req.params
   try {
     await pool.query('DELETE FROM horarios WHERE id = $1', [id])
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.json({ mensaje: 'Horario eliminado correctamente' })
   } catch (error) {
     console.error(error)

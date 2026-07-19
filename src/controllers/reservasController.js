@@ -42,6 +42,28 @@ export const crearReserva = async (req, res) => {
   if (reservaExistente.rows.length > 0) {
     throw new Error(`Ya tenés una reserva activa para esta clase en ese período`)
   }
+  // Verificar superposición de horarios el mismo día
+const superposicion = await client.query(
+  `SELECT r.id FROM reservas r
+   JOIN horarios h ON r.horario_id = h.id
+   WHERE r.usuario_id = $1
+   AND r.estado NOT IN ('cancelado')
+   AND h.dia_semana = (SELECT dia_semana FROM horarios WHERE id = $2)
+   AND (
+     (h.hora_inicio < (SELECT hora_fin FROM horarios WHERE id = $2) AND
+      h.hora_fin > (SELECT hora_inicio FROM horarios WHERE id = $2))
+   )
+   AND (
+     (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
+     (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
+     (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
+   )`,
+  [usuario_id, horario_id, fecha_inicio, fecha_fin]
+)
+
+if (superposicion.rows.length > 0) {
+  throw new Error(`Ya tenés una clase en ese horario ese día`)
+}
   // ─────────────────────────
 
   // Verificar que el horario y la clase estén activos
