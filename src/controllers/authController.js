@@ -1,12 +1,21 @@
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import pool from '../db/conexion.js'
+import { validarDatosUsuario } from '../utils/validaciones.js'
+
 export const registro = async (req, res) => {
-  const { nombre, email, password, dni, telefono } = req.body
+  const { nombre, password, dni, telefono } = req.body
+  // Normalizamos el email para que no entren duplicados por mayúsculas
+  const email = String(req.body.email || '').trim().toLowerCase()
 
   try {
     if (!nombre || !email || !password || !dni || !telefono) {
       return res.status(400).json({ error: 'Todos los campos son obligatorios' })
+    }
+
+    const errorValidacion = validarDatosUsuario({ nombre, email, password, dni, telefono })
+    if (errorValidacion) {
+      return res.status(400).json({ error: errorValidacion })
     }
 
     const existeEmail = await pool.query(
@@ -49,9 +58,14 @@ export const registro = async (req, res) => {
 
 }
 export const login = async (req, res) => {
-  const { email, password } = req.body
+  const { password } = req.body
+  const email = String(req.body.email || '').trim().toLowerCase()
 
   try {
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email y contraseña son obligatorios' })
+    }
+
     const resultado = await pool.query(
       'SELECT * FROM usuarios WHERE email = $1',
       [email]
@@ -81,7 +95,10 @@ export const login = async (req, res) => {
         nombre: usuario.nombre,
         email: usuario.email,
         dni: usuario.dni,
-        rol: usuario.rol
+        rol: usuario.rol,
+        // Si el administrador le restableció la contraseña, la app le va a
+        // pedir que elija una propia antes de dejarlo seguir.
+        debe_cambiar_password: usuario.debe_cambiar_password === true
       }
     })
 

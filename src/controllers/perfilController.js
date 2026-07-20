@@ -1,11 +1,13 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
+import { validarDatosUsuario } from '../utils/validaciones.js'
 
 export const obtenerPerfil = async (req, res) => {
   const id = req.usuario.id
   try {
     const resultado = await pool.query(
-      'SELECT id, nombre, email, dni, telefono, rol, created_at FROM usuarios WHERE id = $1',
+      `SELECT id, nombre, email, dni, telefono, rol, created_at, debe_cambiar_password
+       FROM usuarios WHERE id = $1`,
       [id]
     )
     res.json(resultado.rows[0])
@@ -47,11 +49,17 @@ export const obtenerHistorialPagos = async (req, res) => {
 
 export const editarPerfil = async (req, res) => {
   const id = req.usuario.id
-  const { nombre, email, telefono } = req.body
+  const { nombre, telefono } = req.body
+  const email = String(req.body.email || '').trim().toLowerCase()
 
   try {
     if (!nombre || !email || !telefono) {
       return res.status(400).json({ error: 'Completá todos los campos' })
+    }
+
+    const errorValidacion = validarDatosUsuario({ nombre, email, telefono })
+    if (errorValidacion) {
+      return res.status(400).json({ error: errorValidacion })
     }
 
     // Verificamos que el email no lo use otro usuario
@@ -83,6 +91,15 @@ export const cambiarPassword = async (req, res) => {
   const { password_actual, password_nueva } = req.body
 
   try {
+    if (!password_actual || !password_nueva) {
+      return res.status(400).json({ error: 'Completá la contraseña actual y la nueva' })
+    }
+
+    const errorValidacion = validarDatosUsuario({ password: password_nueva })
+    if (errorValidacion) {
+      return res.status(400).json({ error: errorValidacion })
+    }
+
     const usuario = await pool.query(
       'SELECT password FROM usuarios WHERE id = $1', [id]
     )
@@ -92,13 +109,11 @@ export const cambiarPassword = async (req, res) => {
       return res.status(400).json({ error: 'La contraseña actual es incorrecta' })
     }
 
-    if (password_nueva.length < 6) {
-      return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres' })
-    }
-
     const hashed = await bcrypt.hash(password_nueva, 10)
+    // Al elegir una contraseña propia deja de estar pendiente el cambio
+    // obligatorio que impone el restablecimiento desde el panel.
     await pool.query(
-      'UPDATE usuarios SET password=$1 WHERE id=$2',
+      'UPDATE usuarios SET password=$1, debe_cambiar_password=false WHERE id=$2',
       [hashed, id]
     )
 

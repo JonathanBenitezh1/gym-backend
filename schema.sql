@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict svlvJkzSTCymPytsFyOiJf58d8PlSjylTt3iizJk0jubPUplfvlcVZhYQ4pSwyC
+\restrict zNZbsiuTCaJ9ZYECjYXIE8Y3VoNwqYqxKye5W2qBUb1Turpr4ZwxTrtnDGCXRKr
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -329,7 +329,8 @@ CREATE TABLE public.usuarios (
     dni character varying(20) NOT NULL,
     telefono character varying(20),
     rol character varying(20) DEFAULT 'alumno'::character varying,
-    created_at timestamp without time zone DEFAULT now()
+    created_at timestamp without time zone DEFAULT now(),
+    debe_cambiar_password boolean DEFAULT false NOT NULL
 );
 
 
@@ -604,5 +605,5 @@ ALTER TABLE ONLY public.sesiones
 -- PostgreSQL database dump complete
 --
 
-\unrestrict svlvJkzSTCymPytsFyOiJf58d8PlSjylTt3iizJk0jubPUplfvlcVZhYQ4pSwyC
+\unrestrict zNZbsiuTCaJ9ZYECjYXIE8Y3VoNwqYqxKye5W2qBUb1Turpr4ZwxTrtnDGCXRKr
 

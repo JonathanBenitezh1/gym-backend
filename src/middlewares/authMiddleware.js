@@ -26,9 +26,13 @@ export const soloAdmin = (req, res, next) => {
   next()
 }
 
-// Verifica que el usuario sea profesor o admin
+// Roles que dictan clases: además del profesor están los profesionales
+// (nutrición, kinesiología, entrenamiento personal), que también tienen
+// clases asignadas y gestionan sus horarios y rutinas.
+export const ROLES_DOCENTES = ['profesor', 'profesional', 'admin']
+
 export const soloProfesor = (req, res, next) => {
-  if (req.usuario.rol !== 'profesor' && req.usuario.rol !== 'admin') {
+  if (!ROLES_DOCENTES.includes(req.usuario.rol)) {
     return res.status(403).json({ error: 'Acceso solo para profesores' })
   }
   next()

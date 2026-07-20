@@ -1,4 +1,6 @@
 import pool from '../db/conexion.js'
+import bcrypt from 'bcryptjs'
+import { randomInt } from 'node:crypto'
 
 // ─── CLASES ───────────────────────────────────────────
 
@@ -131,6 +133,26 @@ export const crearHorario = async (req, res) => {
   }
 }
 
+// Lista todos los horarios, incluidos los inactivos, con el nombre de la
+// clase y del profesor. La ruta pública solo devuelve los activos, así que
+// sin esto el administrador no podía ver ni corregir los que dio de baja.
+export const obtenerHorariosAdmin = async (req, res) => {
+  try {
+    const resultado = await pool.query(
+      `SELECT h.*, c.nombre AS clase, c.rama, c.activo AS clase_activa,
+              u.nombre AS profesor
+       FROM horarios h
+       JOIN clases c ON h.clase_id = c.id
+       LEFT JOIN usuarios u ON c.profesor_id = u.id
+       ORDER BY c.nombre, h.dia_semana, h.hora_inicio`
+    )
+    res.json(resultado.rows)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al obtener los horarios' })
+  }
+}
+
 export const editarHorario = async (req, res) => {
   const { id } = req.params
   const { dia_semana, hora_inicio, hora_fin,
@@ -176,6 +198,56 @@ export const obtenerUsuarios = async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al obtener usuarios' })
+  }
+}
+
+/**
+ * Genera una contraseña temporal fácil de dictar en voz alta.
+ * Se omiten los caracteres que se confunden al leerlos (O/0, I/1/L).
+ */
+function generarPasswordTemporal() {
+  const LETRAS  = 'ABCDEFGHJKMNPQRSTUVWXYZ'
+  const NUMEROS = '23456789'
+  let clave = ''
+  for (let i = 0; i < 4; i++) clave += LETRAS[randomInt(LETRAS.length)]
+  for (let i = 0; i < 4; i++) clave += NUMEROS[randomInt(NUMEROS.length)]
+  return clave
+}
+
+/**
+ * Restablece la contraseña de un usuario y devuelve la temporal UNA sola vez,
+ * para que el administrador se la pase al socio. Queda marcada como temporal:
+ * la app lo obliga a elegir una propia antes de seguir usando el sistema.
+ */
+export const restablecerPassword = async (req, res) => {
+  const { id } = req.params
+
+  try {
+    const usuario = await pool.query(
+      'SELECT id, nombre, email FROM usuarios WHERE id = $1',
+      [id]
+    )
+
+    if (usuario.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' })
+    }
+
+    const temporal = generarPasswordTemporal()
+    const hash = await bcrypt.hash(temporal, 10)
+
+    await pool.query(
+      'UPDATE usuarios SET password = $1, debe_cambiar_password = true WHERE id = $2',
+      [hash, id]
+    )
+
+    res.json({
+      mensaje: 'Contraseña restablecida',
+      usuario: usuario.rows[0],
+      password_temporal: temporal
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al restablecer la contraseña' })
   }
 }
 
@@ -225,21 +297,46 @@ export const obtenerReservas = async (req, res) => {
 export const confirmarPagoEfectivo = async (req, res) => {
   const { id } = req.params
 
+  const client = await pool.connect()
+
   try {
-    await pool.query(
-      `UPDATE pagos SET estado='pagado' WHERE reserva_id=$1`, [id]
+    await client.query('BEGIN')
+
+    const reserva = await client.query(
+      'SELECT estado FROM reservas WHERE id = $1',
+      [id]
     )
-    await pool.query(
-      `UPDATE reservas SET estado='pagado' WHERE id=$1`, [id]
-    )
+
+    if (reserva.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Reserva no encontrada' })
+    }
+
+    if (reserva.rows[0].estado === 'cancelado') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'No se puede confirmar el pago de una reserva cancelada' })
+    }
+
+    if (reserva.rows[0].estado === 'pagado') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Esta reserva ya figura como pagada' })
+    }
+
+    await client.query(`UPDATE pagos SET estado='pagado' WHERE reserva_id=$1`, [id])
+    await client.query(`UPDATE reservas SET estado='pagado' WHERE id=$1`, [id])
+
+    await client.query('COMMIT')
 
     const io = req.app.get('io')
     io.emit('pago_confirmado', { reserva_id: id })
 
     res.json({ mensaje: 'Pago confirmado correctamente' })
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     res.status(500).json({ error: 'Error al confirmar el pago' })
+  } finally {
+    client.release()
   }
 }
 
