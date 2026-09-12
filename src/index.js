@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
 import rateLimit from 'express-rate-limit'
 import dotenv from 'dotenv'
@@ -82,7 +83,38 @@ app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })
 })
 
+/**
+ * La conexion de tiempo real ahora pide el mismo token que la API.
+ *
+ * Antes cualquiera podia conectarse sin credenciales y escuchar todo lo que
+ * el servidor emitia, incluidos ids de usuario y montos de pago.
+ */
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token
+
+  if (!token) {
+    return next(new Error('Falta el token'))
+  }
+
+  try {
+    socket.data.usuario = jwt.verify(token, process.env.JWT_SECRET)
+    next()
+  } catch {
+    next(new Error('Token invalido o expirado'))
+  }
+})
+
 io.on('connection', (socket) => {
+  const { id, rol } = socket.data.usuario
+
+  // Cada uno entra a su propia sala, asi los avisos personales le llegan
+  // solo a quien corresponde. Antes un "tu pago fue confirmado" le aparecia
+  // a todos los socios conectados, no al que habia pagado.
+  socket.join(`usuario:${id}`)
+
+  // El panel necesita enterarse de cada reserva y de cada pago.
+  if (rol === 'admin') socket.join('admins')
+
   socket.on('disconnect', () => {})
 })
 

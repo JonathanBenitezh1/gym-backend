@@ -59,6 +59,70 @@ export function validarDatosUsuario({ nombre, email, password, dni, telefono }) 
 }
 
 /**
+ * Días tal como los guarda la base: texto, no número. La pantalla del panel
+ * ofrece de lunes a sábado; se incluye domingo por si algún día se usa.
+ */
+export const DIAS_SEMANA = [
+  'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
+]
+
+const RE_HORA = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
+
+/**
+ * Valida un horario antes de crearlo o editarlo. Devuelve el primer error,
+ * o null si está todo bien. Los campos que no vienen no se validan, porque
+ * el profesor manda menos campos que el administrador.
+ *
+ * Sin esto un error de tipeo en el panel dejaba horarios imposibles: la hora
+ * de fin antes de la de inicio, cupos negativos o un precio en cero.
+ */
+export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio }) {
+  if (dia_semana !== undefined && !DIAS_SEMANA.includes(String(dia_semana))) {
+    return 'El día tiene que ser uno de la semana, escrito como en el panel'
+  }
+
+  if (hora_inicio !== undefined && !RE_HORA.test(String(hora_inicio))) {
+    return 'La hora de inicio no es válida'
+  }
+
+  if (hora_fin !== undefined && !RE_HORA.test(String(hora_fin))) {
+    return 'La hora de fin no es válida'
+  }
+
+  if (hora_inicio !== undefined && hora_fin !== undefined &&
+      String(hora_fin) <= String(hora_inicio)) {
+    return 'La hora de fin tiene que ser posterior a la de inicio'
+  }
+
+  let totales
+  if (cupos_totales !== undefined) {
+    totales = Number(cupos_totales)
+    if (!Number.isInteger(totales) || totales < 1 || totales > 500) {
+      return 'Los cupos totales tienen que ser un número entero entre 1 y 500'
+    }
+  }
+
+  if (cupos_disponibles !== undefined) {
+    const disponibles = Number(cupos_disponibles)
+    if (!Number.isInteger(disponibles) || disponibles < 0) {
+      return 'Los cupos disponibles no pueden ser negativos'
+    }
+    if (totales !== undefined && disponibles > totales) {
+      return 'No puede haber más cupos disponibles que cupos totales'
+    }
+  }
+
+  if (precio !== undefined) {
+    const valor = Number(precio)
+    if (!Number.isFinite(valor) || valor < 0) {
+      return 'El precio no puede ser negativo'
+    }
+  }
+
+  return null
+}
+
+/**
  * Tipos de reserva, con los días que cubren y lo que multiplican al precio
  * del horario. Antes el precio se calculaba con el tipo pero el período lo
  * elegía el cliente, así que se podía pedir una reserva de cinco años y

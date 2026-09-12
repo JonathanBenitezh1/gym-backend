@@ -1,5 +1,7 @@
 import pool from '../db/conexion.js'
 
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
+
 /**
  * Verifica que el horario pertenezca a una clase del profesor.
  * Los administradores pueden acceder a cualquier horario.
@@ -24,8 +26,8 @@ export const obtenerAlumnosDeHorario = async (req, res) => {
   const { fecha } = req.query
 
   try {
-    if (!fecha) {
-      return res.status(400).json({ error: 'Falta la fecha' })
+    if (!RE_FECHA.test(String(fecha || ''))) {
+      return res.status(400).json({ error: 'Falta la fecha, o no tiene el formato correcto' })
     }
 
     if (!await puedeAccederAlHorario(req.usuario, horario_id)) {
@@ -45,6 +47,7 @@ export const obtenerAlumnosDeHorario = async (req, res) => {
          AND a.fecha = $2
        WHERE r.horario_id = $1
        AND r.estado IN ('pendiente', 'pagado')
+       AND $2::date BETWEEN r.fecha_inicio AND r.fecha_fin
        ORDER BY u.nombre`,
       [horario_id, fecha]
     )
@@ -59,7 +62,7 @@ export const marcarAsistencia = async (req, res) => {
   const { horario_id, usuario_id, fecha, asistio } = req.body
 
   try {
-    if (!horario_id || !usuario_id || !fecha) {
+    if (!horario_id || !usuario_id || !RE_FECHA.test(String(fecha || ''))) {
       return res.status(400).json({ error: 'Faltan datos para registrar la asistencia' })
     }
 
@@ -71,11 +74,14 @@ export const marcarAsistencia = async (req, res) => {
     const tieneReserva = await pool.query(
       `SELECT 1 FROM reservas
        WHERE horario_id = $1 AND usuario_id = $2
-       AND estado IN ('pendiente', 'pagado')`,
-      [horario_id, usuario_id]
+       AND estado IN ('pendiente', 'pagado')
+       AND $3::date BETWEEN fecha_inicio AND fecha_fin`,
+      [horario_id, usuario_id, fecha]
     )
     if (tieneReserva.rows.length === 0) {
-      return res.status(400).json({ error: 'Ese alumno no tiene una reserva activa en este horario' })
+      return res.status(400).json({
+        error: 'Ese alumno no tiene una reserva que cubra esa fecha en este horario'
+      })
     }
 
     await pool.query(

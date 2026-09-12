@@ -1,4 +1,5 @@
 import pool from '../db/conexion.js'
+import { validarHorario } from '../utils/validaciones.js'
 
 // ─── MIS CLASES Y HORARIOS ────────────────────────────
 
@@ -42,6 +43,13 @@ export const modificarHorario = async (req, res) => {
   const { id } = req.params
   const profesor_id = req.usuario.id
   const { dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, activo } = req.body
+
+  const errorHorario = validarHorario({
+    dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles
+  })
+  if (errorHorario) {
+    return res.status(400).json({ error: errorHorario })
+  }
 
   try {
     const verificacion = await pool.query(
@@ -138,9 +146,30 @@ export const obtenerRutinaDeAlumno = async (req, res) => {
   }
 }
 
+// Topes de una rutina. Sin esto se podian mandar miles de sesiones y
+// ejercicios en un solo pedido, todo dentro de una misma transaccion.
+const MAX_SESIONES = 14
+const MAX_EJERCICIOS = 30
+
 export const guardarRutina = async (req, res) => {
   const profesor_id = req.usuario.id
   const { alumno_id, sesiones } = req.body
+
+  if (!Array.isArray(sesiones) || sesiones.length === 0) {
+    return res.status(400).json({ error: 'La rutina tiene que tener al menos una sesión' })
+  }
+
+  if (sesiones.length > MAX_SESIONES) {
+    return res.status(400).json({ error: `La rutina no puede tener más de ${MAX_SESIONES} sesiones` })
+  }
+
+  for (const sesion of sesiones) {
+    if (Array.isArray(sesion?.ejercicios) && sesion.ejercicios.length > MAX_EJERCICIOS) {
+      return res.status(400).json({
+        error: `Cada sesión admite hasta ${MAX_EJERCICIOS} ejercicios`
+      })
+    }
+  }
 
   // sesiones es un array de { nombre, orden, ejercicios: [{ nombre, series, repeticiones, orden }] }
 
@@ -155,7 +184,8 @@ export const guardarRutina = async (req, res) => {
       [alumno_id, 'alumno']
     )
     if (alumno.rows.length === 0) {
-      throw new Error('Alumno no encontrado')
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'No se encontró ese alumno' })
     }
 
     // Buscamos si ya existe una rutina de este profesor para este alumno
@@ -205,8 +235,10 @@ export const guardarRutina = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK')
+    // No se devuelve error.message: filtraba nombres de columnas y de
+    // restricciones de la base cuando la falla era inesperada.
     console.error(error)
-    res.status(500).json({ error: error.message || 'Error al guardar la rutina' })
+    res.status(500).json({ error: 'No se pudo guardar la rutina' })
   } finally {
     client.release()
   }

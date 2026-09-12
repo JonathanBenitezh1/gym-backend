@@ -49,8 +49,9 @@ export const registrarPagoEfectivo = async (req, res) => {
     )
 
     // Avisamos al panel en tiempo real
+    // Solo al panel: el monto no tiene por que verlo el resto de los socios.
     const io = req.app.get('io')
-    io.emit('nuevo_pago', { reserva_id, monto, metodo })
+    io.to('admins').emit('nuevo_pago', { reserva_id, monto, metodo })
 
     res.status(201).json(pago.rows[0])
 

@@ -1,6 +1,7 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
+import { validarHorario } from '../utils/validaciones.js'
 
 // ─── CLASES ───────────────────────────────────────────
 
@@ -25,12 +26,36 @@ export const crearClase = async (req, res) => {
 
 export const editarClase = async (req, res) => {
   const { id } = req.params
-  const { nombre, rama, profesor_id, descripcion, duracion, activo } = req.body
 
   const client = await pool.connect()
 
   try {
     await client.query('BEGIN')
+
+    const actual = await client.query(
+      'SELECT * FROM clases WHERE id = $1 FOR UPDATE',
+      [id]
+    )
+
+    if (actual.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'La clase no existe' })
+    }
+
+    const previa = actual.rows[0]
+
+    // Se cambia solo lo que trae el pedido. Antes se escribian los seis
+    // campos siempre, asi que un pedido sin `activo` lo dejaba en NULL, y
+    // como NULL no es verdadero, eso cancelaba todas las reservas
+    // pendientes de la clase sin que nadie lo hubiera pedido.
+    const tomar = (campo) => req.body[campo] === undefined ? previa[campo] : req.body[campo]
+
+    const nombre      = tomar('nombre')
+    const rama        = tomar('rama')
+    const profesor_id = tomar('profesor_id')
+    const descripcion = tomar('descripcion')
+    const duracion    = tomar('duracion')
+    const activo      = req.body.activo === undefined ? previa.activo : Boolean(req.body.activo)
 
     const resultado = await client.query(
       `UPDATE clases SET nombre=$1, rama=$2, profesor_id=$3,
@@ -39,20 +64,27 @@ export const editarClase = async (req, res) => {
       [nombre, rama, profesor_id, descripcion, duracion, activo, id]
     )
 
-    // Si se desactiva la clase, cancelar reservas pendientes y devolver cupos
-    if (!activo) {
+    // Solo cuando la clase pasa de activa a inactiva se cancelan reservas.
+    const seDesactivo = previa.activo === true && activo === false
+
+    // Se guardan aca para poder avisarles despues del commit.
+    const usuariosAfectados = new Set()
+
+    if (seDesactivo) {
       // Obtenemos las reservas pendientes de esta clase
       const reservasPendientes = await client.query(
-        `SELECT r.id, r.horario_id FROM reservas r
+        `SELECT r.id, r.horario_id, r.usuario_id FROM reservas r
          JOIN horarios h ON r.horario_id = h.id
          WHERE h.clase_id = $1 AND r.estado = 'pendiente'`,
         [id]
       )
 
       for (const reserva of reservasPendientes.rows) {
-        // Devolvemos el cupo
+        usuariosAfectados.add(reserva.usuario_id)
+
+        // Devolvemos el cupo, sin pasarnos del total del horario.
         await client.query(
-          `UPDATE horarios SET cupos_disponibles = cupos_disponibles + 1
+          `UPDATE horarios SET cupos_disponibles = LEAST(cupos_disponibles + 1, cupos_totales)
            WHERE id = $1`,
           [reserva.horario_id]
         )
@@ -69,8 +101,14 @@ export const editarClase = async (req, res) => {
     // Notificar a todos en tiempo real
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
-    if (!activo) {
-      io.emit('reserva_cancelada', { mensaje: 'Clase desactivada' })
+
+    if (seDesactivo) {
+      // El aviso de cancelacion va a cada socio afectado y al panel, no a
+      // toda la app: antes le avisaba a cualquiera que estuviera conectado.
+      for (const usuario_id of usuariosAfectados) {
+        io.to(`usuario:${usuario_id}`).emit('reserva_cancelada', { mensaje: 'Clase desactivada' })
+      }
+      io.to('admins').emit('reserva_cancelada', { mensaje: 'Clase desactivada' })
     }
 
     res.json(resultado.rows[0])
@@ -116,6 +154,11 @@ export const crearHorario = async (req, res) => {
   const { clase_id, dia_semana, hora_inicio, hora_fin,
           cupos_totales, precio } = req.body
 
+  const errorHorario = validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, precio })
+  if (errorHorario) {
+    return res.status(400).json({ error: errorHorario })
+  }
+
   try {
     const resultado = await pool.query(
       `INSERT INTO horarios 
@@ -157,6 +200,13 @@ export const editarHorario = async (req, res) => {
   const { id } = req.params
   const { dia_semana, hora_inicio, hora_fin,
           cupos_totales, cupos_disponibles, precio, activo } = req.body
+
+  const errorHorario = validarHorario({
+    dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio
+  })
+  if (errorHorario) {
+    return res.status(400).json({ error: errorHorario })
+  }
 
   try {
     const resultado = await pool.query(
@@ -260,15 +310,56 @@ export const cambiarRol = async (req, res) => {
     return res.status(400).json({ error: 'Rol no válido' })
   }
 
+  // Un administrador que se saca el rol a si mismo deja el panel sin nadie
+  // adentro, y para recuperarlo hay que tocar la base a mano.
+  if (Number(id) === req.usuario.id) {
+    return res.status(400).json({
+      error: 'No podés cambiar tu propio rol. Pedíselo a otro administrador'
+    })
+  }
+
+  const client = await pool.connect()
+
   try {
-    const resultado = await pool.query(
+    await client.query('BEGIN')
+
+    const objetivo = await client.query(
+      'SELECT id, rol FROM usuarios WHERE id = $1 FOR UPDATE',
+      [id]
+    )
+
+    if (objetivo.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Usuario no encontrado' })
+    }
+
+    // Tampoco se puede dejar el gimnasio sin ningun administrador.
+    if (objetivo.rows[0].rol === 'admin' && rol !== 'admin') {
+      const otros = await client.query(
+        `SELECT COUNT(*)::int AS total FROM usuarios WHERE rol = 'admin' AND id <> $1`,
+        [id]
+      )
+      if (otros.rows[0].total === 0) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({
+          error: 'Es el único administrador que queda. Nombrá otro antes de cambiarle el rol'
+        })
+      }
+    }
+
+    const resultado = await client.query(
       'UPDATE usuarios SET rol=$1 WHERE id=$2 RETURNING id, nombre, email, rol',
       [rol, id]
     )
+
+    await client.query('COMMIT')
     res.json(resultado.rows[0])
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     res.status(500).json({ error: 'Error al cambiar el rol' })
+  } finally {
+    client.release()
   }
 }
 
@@ -303,7 +394,7 @@ export const confirmarPagoEfectivo = async (req, res) => {
     await client.query('BEGIN')
 
     const reserva = await client.query(
-      'SELECT estado FROM reservas WHERE id = $1',
+      'SELECT estado, total, usuario_id FROM reservas WHERE id = $1 FOR UPDATE',
       [id]
     )
 
@@ -322,13 +413,33 @@ export const confirmarPagoEfectivo = async (req, res) => {
       return res.status(400).json({ error: 'Esta reserva ya figura como pagada' })
     }
 
-    await client.query(`UPDATE pagos SET estado='pagado' WHERE reserva_id=$1`, [id])
+    const pagoPrevio = await client.query(
+      'SELECT id FROM pagos WHERE reserva_id = $1',
+      [id]
+    )
+
+    if (pagoPrevio.rows.length === 0) {
+      // El socio pago en el mostrador sin registrarlo desde la app. Antes la
+      // reserva quedaba en 'pagado' pero sin fila en pagos, asi que el cobro
+      // no aparecia en el historial ni en ninguna cuenta.
+      await client.query(
+        `INSERT INTO pagos (reserva_id, monto, metodo, estado)
+         VALUES ($1, $2, 'efectivo', 'pagado')`,
+        [id, reserva.rows[0].total]
+      )
+    } else {
+      await client.query(`UPDATE pagos SET estado='pagado' WHERE reserva_id=$1`, [id])
+    }
+
     await client.query(`UPDATE reservas SET estado='pagado' WHERE id=$1`, [id])
 
     await client.query('COMMIT')
 
+    // Al socio que pago y al panel. Antes se anunciaba a todos, asi que
+    // cualquiera recibia un "tu pago fue confirmado" que no era suyo.
     const io = req.app.get('io')
-    io.emit('pago_confirmado', { reserva_id: id })
+    io.to(`usuario:${reserva.rows[0].usuario_id}`).emit('pago_confirmado', { reserva_id: id })
+    io.to('admins').emit('pago_confirmado', { reserva_id: id })
 
     res.json({ mensaje: 'Pago confirmado correctamente' })
   } catch (error) {

@@ -136,8 +136,9 @@ export const crearReserva = async (req, res) => {
     await client.query('COMMIT')
 
     const io = req.app.get('io')
+    // Los cupos cambiaron para todos; el detalle de la reserva, solo al panel.
     io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
-    io.emit('nueva_reserva', { usuario_id, total, tipo })
+    io.to('admins').emit('nueva_reserva', { usuario_id, total, tipo })
 
     res.status(201).json({
       mensaje: 'Reservas creadas correctamente',
@@ -232,7 +233,8 @@ export const cancelarReserva = async (req, res) => {
 
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
-    io.emit('reserva_cancelada', { reserva_id: id })
+    // Quien cancela ya lo sabe: este aviso es para que el panel se actualice.
+    io.to('admins').emit('reserva_cancelada', { reserva_id: id })
 
     res.json({ mensaje: 'Reserva cancelada correctamente' })
 
