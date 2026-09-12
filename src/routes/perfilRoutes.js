@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { verificarToken } from '../middlewares/authMiddleware.js'
+import { verificarToken, exigirPasswordPropia } from '../middlewares/authMiddleware.js'
 import {
   obtenerPerfil,
   editarPerfil,
@@ -11,8 +11,14 @@ const router = Router()
 
 router.use(verificarToken)
 
-router.get('/',               obtenerPerfil)
-router.put('/',               editarPerfil)
+// Estas dos siguen abiertas con una clave temporal: son justo las que
+// necesita la pantalla de cambio obligatorio para poder salir de ahi.
+router.get('/',                 obtenerPerfil)
 router.put('/cambiar-password', cambiarPassword)
+
+// De aca para abajo hace falta tener una contrasena propia.
+router.use(exigirPasswordPropia)
+
+router.put('/',      editarPerfil)
 router.get('/pagos', obtenerHistorialPagos)
 export default router

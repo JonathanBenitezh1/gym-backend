@@ -57,3 +57,109 @@ export function validarDatosUsuario({ nombre, email, password, dni, telefono }) 
 
   return null
 }
+
+/**
+ * Tipos de reserva, con los días que cubren y lo que multiplican al precio
+ * del horario. Antes el precio se calculaba con el tipo pero el período lo
+ * elegía el cliente, así que se podía pedir una reserva de cinco años y
+ * pagar una semana. Ahora el tipo manda las dos cosas.
+ */
+export const TIPOS_RESERVA = {
+  semanal:   { dias: 7,  multiplicador: 1 },
+  quincenal: { dias: 14, multiplicador: 2 }
+}
+
+// Tope de horarios por pedido. Sin esto, un array enorme hace cientos de
+// consultas con filas bloqueadas dentro de una sola transacción.
+export const MAX_HORARIOS_POR_RESERVA = 10
+
+// Hasta cuándo se puede reservar hacia adelante.
+const MAX_DIAS_A_FUTURO = 60
+
+const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
+
+// El servidor corre en UTC y el gimnasio vive en UTC-3. Sin fijar la zona,
+// después de las 21 de Argentina el servidor ya está en el día siguiente y
+// rechazaría como vencida una reserva para hoy.
+const ZONA_GIMNASIO = 'America/Argentina/Buenos_Aires'
+
+/**
+ * Hoy en el huso del gimnasio, como milisegundos de la medianoche UTC de ese
+ * día. Sirve para comparar días sin que moleste la hora.
+ */
+function hoyEnElGimnasio() {
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ZONA_GIMNASIO,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date())
+
+  return Date.parse(`${partes}T00:00:00Z`)
+}
+
+/**
+ * Valida el pedido de reserva y devuelve `{ error }` o los datos ya
+ * normalizados: `{ horarios, tipo, fechaInicio, fechaFin, multiplicador }`.
+ *
+ * `fecha_fin` no se toma del cliente: se calcula acá a partir del tipo.
+ */
+export function validarPedidoDeReserva({ horarios_ids, tipo, fecha_inicio }) {
+  if (!Array.isArray(horarios_ids) || horarios_ids.length === 0) {
+    return { error: 'Elegí al menos un horario' }
+  }
+
+  if (horarios_ids.length > MAX_HORARIOS_POR_RESERVA) {
+    return { error: `No podés reservar más de ${MAX_HORARIOS_POR_RESERVA} horarios por vez` }
+  }
+
+  const horarios = []
+  for (const valor of horarios_ids) {
+    const id = Number(valor)
+    if (!Number.isInteger(id) || id <= 0) {
+      return { error: 'Hay un horario inválido en el pedido' }
+    }
+    if (horarios.includes(id)) {
+      return { error: 'Hay un horario repetido en el pedido' }
+    }
+    horarios.push(id)
+  }
+
+  const definicion = TIPOS_RESERVA[tipo]
+  if (!definicion) {
+    return { error: 'El tipo de reserva tiene que ser semanal o quincenal' }
+  }
+
+  if (!RE_FECHA.test(String(fecha_inicio || ''))) {
+    return { error: 'La fecha de inicio no tiene un formato válido' }
+  }
+
+  const inicio = Date.parse(`${fecha_inicio}T00:00:00Z`)
+  if (Number.isNaN(inicio)) {
+    return { error: 'La fecha de inicio no existe' }
+  }
+
+  const hoy = hoyEnElGimnasio()
+  const UN_DIA = 24 * 60 * 60 * 1000
+
+  if (inicio < hoy) {
+    return { error: 'No se puede reservar una fecha que ya pasó' }
+  }
+
+  if (inicio > hoy + MAX_DIAS_A_FUTURO * UN_DIA) {
+    return { error: `Solo se puede reservar hasta ${MAX_DIAS_A_FUTURO} días a futuro` }
+  }
+
+  // Se suman los días completos, igual que venía calculando la pantalla de
+  // horarios: una semanal desde un lunes vence el lunes siguiente. Se
+  // mantiene así a propósito, para no cambiarle el período a nadie.
+  const fin = new Date(inicio + definicion.dias * UN_DIA)
+
+  return {
+    horarios,
+    tipo,
+    fechaInicio: fecha_inicio,
+    fechaFin: fin.toISOString().slice(0, 10),
+    multiplicador: definicion.multiplicador
+  }
+}

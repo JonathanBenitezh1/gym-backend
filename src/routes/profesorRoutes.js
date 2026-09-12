@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { verificarToken, soloProfesor } from '../middlewares/authMiddleware.js'
+import { verificarToken, soloProfesor, exigirPasswordPropia } from '../middlewares/authMiddleware.js'
 import {
   obtenerMisClases,
   obtenerMisHorarios,
@@ -12,12 +12,16 @@ import {
 
 const router = Router()
 
-router.get('/mis-clases',          verificarToken, soloProfesor, obtenerMisClases)
-router.get('/mis-horarios',        verificarToken, soloProfesor, obtenerMisHorarios)
-router.put('/horarios/:id',        verificarToken, soloProfesor, modificarHorario)
-router.get('/alumnos/:dni',        verificarToken, soloProfesor, buscarAlumnoPorDni)
-router.get('/rutinas/:alumno_id',  verificarToken, soloProfesor, obtenerRutinaDeAlumno)
-router.post('/rutinas',            verificarToken, soloProfesor, guardarRutina)
-router.get('/mis-rutinas',         verificarToken, obtenerMisRutinasComoAlumno)
+router.use(verificarToken, exigirPasswordPropia)
+
+router.get('/mis-clases',          soloProfesor, obtenerMisClases)
+router.get('/mis-horarios',        soloProfesor, obtenerMisHorarios)
+router.put('/horarios/:id',        soloProfesor, modificarHorario)
+router.get('/alumnos/:dni',        soloProfesor, buscarAlumnoPorDni)
+router.get('/rutinas/:alumno_id',  soloProfesor, obtenerRutinaDeAlumno)
+router.post('/rutinas',            soloProfesor, guardarRutina)
+
+// Esta la usa cualquier alumno para ver la rutina que le cargaron.
+router.get('/mis-rutinas',         obtenerMisRutinasComoAlumno)
 
 export default router

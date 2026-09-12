@@ -43,8 +43,10 @@ export const registro = async (req, res) => {
 
     const usuario = resultado.rows[0]
 
+    // Quien se registra elige su propia clave, asi que nunca arranca con el
+    // cambio obligatorio pendiente.
     const token = jwt.sign(
-      { id: usuario.id, rol: usuario.rol },
+      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: false },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -82,8 +84,12 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' })
     }
 
+    // La marca viaja dentro del token para que el servidor pueda exigir el
+    // cambio sin consultar la base en cada pedido.
+    const debeCambiar = usuario.debe_cambiar_password === true
+
     const token = jwt.sign(
-      { id: usuario.id, rol: usuario.rol },
+      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: debeCambiar },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     )

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { verificarToken, soloAdmin } from '../middlewares/authMiddleware.js'
+import { verificarToken, soloAdmin, exigirPasswordPropia } from '../middlewares/authMiddleware.js'
 import {
   crearClase, editarClase, eliminarClase, obtenerClases,
   crearHorario, editarHorario, eliminarHorario, obtenerHorariosAdmin,
@@ -12,7 +12,7 @@ import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.
 const router = Router()
 
 // Todas las rutas del admin requieren token y rol admin
-router.use(verificarToken, soloAdmin)
+router.use(verificarToken, exigirPasswordPropia, soloAdmin)
 
 // Clases
 router.get('/clases', obtenerClases)

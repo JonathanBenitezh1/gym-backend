@@ -1,5 +1,6 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 import { validarDatosUsuario } from '../utils/validaciones.js'
 
 export const obtenerPerfil = async (req, res) => {
@@ -117,7 +118,16 @@ export const cambiarPassword = async (req, res) => {
       [hashed, id]
     )
 
-    res.json({ mensaje: 'Contraseña actualizada correctamente' })
+    // El token viejo sigue diciendo que el cambio esta pendiente, asi que
+    // devolvemos uno nuevo: sin esto la app quedaria trabada en la pantalla
+    // de cambio obligatorio para siempre.
+    const token = jwt.sign(
+      { id, rol: req.usuario.rol, debe_cambiar_password: false },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    )
+
+    res.json({ mensaje: 'Contraseña actualizada correctamente', token })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al cambiar la contraseña' })

@@ -18,6 +18,23 @@ export const verificarToken = (req, res, next) => {
   }
 }
 
+/**
+ * Bloquea a quien todavia usa una contrasena temporal.
+ *
+ * Antes este control existia solo en el navegador: RutaProtegida mostraba la
+ * pantalla de cambio obligatorio, pero la API contestaba igual. Editando el
+ * localStorage se saltaba la pantalla y la clave temporal quedaba servida.
+ */
+export const exigirPasswordPropia = (req, res, next) => {
+  if (req.usuario?.debe_cambiar_password) {
+    return res.status(403).json({
+      error: 'Elegi una contrasena propia antes de seguir usando la app',
+      codigo: 'DEBE_CAMBIAR_PASSWORD'
+    })
+  }
+  next()
+}
+
 // Verifica que el usuario sea admin
 export const soloAdmin = (req, res, next) => {
   if (req.usuario.rol !== 'admin') {

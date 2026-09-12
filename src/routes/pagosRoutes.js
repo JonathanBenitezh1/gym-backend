@@ -1,10 +1,10 @@
 import { Router } from 'express'
-import { verificarToken } from '../middlewares/authMiddleware.js'
+import { verificarToken, exigirPasswordPropia } from '../middlewares/authMiddleware.js'
 import { registrarPagoEfectivo } from '../controllers/pagosController.js'
 
 const router = Router()
 
-router.use(verificarToken)
+router.use(verificarToken, exigirPasswordPropia)
 
 router.post('/', registrarPagoEfectivo)
 

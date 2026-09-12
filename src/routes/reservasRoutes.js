@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { verificarToken } from '../middlewares/authMiddleware.js'
+import { verificarToken, exigirPasswordPropia } from '../middlewares/authMiddleware.js'
 import {
   crearReserva,
   obtenerMisReservas,
@@ -10,7 +10,7 @@ import {
 const router = Router()
 
 // Todas requieren estar logueado
-router.use(verificarToken)
+router.use(verificarToken, exigirPasswordPropia)
 
 router.post('/', crearReserva)
 router.get('/mis-reservas', obtenerMisReservas)

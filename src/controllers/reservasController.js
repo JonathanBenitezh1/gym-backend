@@ -1,8 +1,38 @@
 import pool from '../db/conexion.js'
+import { validarPedidoDeReserva } from '../utils/validaciones.js'
+
+/**
+ * Error con un mensaje pensado para mostrarle a la persona.
+ *
+ * Hace falta distinguirlos: antes el `catch` devolvía `error.message` de
+ * cualquier error, así que una falla de la base le mostraba al cliente el
+ * nombre de una restricción o de una columna.
+ */
+function errorDeNegocio(mensaje) {
+  return Object.assign(new Error(mensaje), { esDeNegocio: true })
+}
+
+function responderError(res, error, mensajeGenerico) {
+  if (error.esDeNegocio) {
+    return res.status(400).json({ error: error.message })
+  }
+  console.error(error)
+  return res.status(500).json({ error: mensajeGenerico })
+}
 
 export const crearReserva = async (req, res) => {
-  const { horarios_ids, tipo, fecha_inicio, fecha_fin } = req.body
   const usuario_id = req.usuario.id
+
+  // El pedido se valida antes de abrir la transacción, y la fecha de fin la
+  // calcula el servidor a partir del tipo: nunca la que mande el cliente.
+  const pedido = validarPedidoDeReserva(req.body)
+  if (pedido.error) {
+    return res.status(400).json({ error: pedido.error })
+  }
+
+  const { horarios, tipo, multiplicador } = pedido
+  const fecha_inicio = pedido.fechaInicio
+  const fecha_fin    = pedido.fechaFin
 
   const client = await pool.connect()
 
@@ -12,82 +42,81 @@ export const crearReserva = async (req, res) => {
     let total = 0
     const reservasCreadas = []
 
-   for (const horario_id of horarios_ids) {
-  const horario = await client.query(
-    'SELECT * FROM horarios WHERE id = $1 FOR UPDATE',
-    [horario_id]
-  )
+    for (const horario_id of horarios) {
+      // FOR UPDATE bloquea la fila del horario hasta el commit, así dos
+      // personas no pueden tomar el último cupo a la vez.
+      const horario = await client.query(
+        'SELECT * FROM horarios WHERE id = $1 FOR UPDATE',
+        [horario_id]
+      )
 
-  if (horario.rows.length === 0) {
-    throw new Error(`Horario ${horario_id} no encontrado`)
-  }
+      if (horario.rows.length === 0) {
+        throw errorDeNegocio('Uno de los horarios elegidos no existe')
+      }
 
-  const h = horario.rows[0]
+      const h = horario.rows[0]
 
-  // ─── VERIFICACIÓN NUEVA ───
-  // Evitar reservar la misma clase en el mismo período
-  const reservaExistente = await client.query(
-    `SELECT r.id FROM reservas r
-     WHERE r.usuario_id = $1 
-     AND r.horario_id = $2
-     AND r.estado NOT IN ('cancelado')
-     AND (
-       (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
-       (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
-       (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
-     )`,
-    [usuario_id, horario_id, fecha_inicio, fecha_fin]
-  )
+      // No reservar dos veces la misma clase en el mismo período.
+      const reservaExistente = await client.query(
+        `SELECT r.id FROM reservas r
+         WHERE r.usuario_id = $1
+         AND r.horario_id = $2
+         AND r.estado NOT IN ('cancelado')
+         AND (
+           (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
+           (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
+           (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
+         )`,
+        [usuario_id, horario_id, fecha_inicio, fecha_fin]
+      )
 
-  if (reservaExistente.rows.length > 0) {
-    throw new Error(`Ya tenés una reserva activa para esta clase en ese período`)
-  }
-  // Verificar superposición de horarios el mismo día
-const superposicion = await client.query(
-  `SELECT r.id FROM reservas r
-   JOIN horarios h ON r.horario_id = h.id
-   WHERE r.usuario_id = $1
-   AND r.estado NOT IN ('cancelado')
-   AND h.dia_semana = (SELECT dia_semana FROM horarios WHERE id = $2)
-   AND (
-     (h.hora_inicio < (SELECT hora_fin FROM horarios WHERE id = $2) AND
-      h.hora_fin > (SELECT hora_inicio FROM horarios WHERE id = $2))
-   )
-   AND (
-     (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
-     (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
-     (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
-   )`,
-  [usuario_id, horario_id, fecha_inicio, fecha_fin]
-)
+      if (reservaExistente.rows.length > 0) {
+        throw errorDeNegocio('Ya tenés una reserva activa para esta clase en ese período')
+      }
 
-if (superposicion.rows.length > 0) {
-  throw new Error(`Ya tenés una clase en ese horario ese día`)
-}
-  // ─────────────────────────
+      // Tampoco dos clases que se pisan el mismo día.
+      const superposicion = await client.query(
+        `SELECT r.id FROM reservas r
+         JOIN horarios h ON r.horario_id = h.id
+         WHERE r.usuario_id = $1
+         AND r.estado NOT IN ('cancelado')
+         AND h.dia_semana = (SELECT dia_semana FROM horarios WHERE id = $2)
+         AND (
+           h.hora_inicio < (SELECT hora_fin FROM horarios WHERE id = $2) AND
+           h.hora_fin > (SELECT hora_inicio FROM horarios WHERE id = $2)
+         )
+         AND (
+           (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
+           (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
+           (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
+         )`,
+        [usuario_id, horario_id, fecha_inicio, fecha_fin]
+      )
 
-  // Verificar que el horario y la clase estén activos
-  const claseActiva = await client.query(
-    `SELECT c.activo FROM clases c
-     JOIN horarios h ON h.clase_id = c.id
-     WHERE h.id = $1`,
-    [horario_id]
-  )
-  if (!claseActiva.rows[0]?.activo || !h.activo) {
-    throw new Error(`Una de las clases seleccionadas ya no está disponible`)
-  }
+      if (superposicion.rows.length > 0) {
+        throw errorDeNegocio('Ya tenés una clase en ese horario ese día')
+      }
 
-  if (h.cupos_disponibles <= 0) {
-    throw new Error(`No hay cupos disponibles en uno de los horarios seleccionados`)
-  }
+      // El horario y su clase tienen que estar activos.
+      const claseActiva = await client.query(
+        `SELECT c.activo FROM clases c
+         JOIN horarios h ON h.clase_id = c.id
+         WHERE h.id = $1`,
+        [horario_id]
+      )
+      if (!claseActiva.rows[0]?.activo || !h.activo) {
+        throw errorDeNegocio('Una de las clases seleccionadas ya no está disponible')
+      }
 
-  // ... resto del código existente
+      if (h.cupos_disponibles <= 0) {
+        throw errorDeNegocio('No hay cupos disponibles en uno de los horarios seleccionados')
+      }
 
-      const precio = tipo === 'quincenal' ? h.precio * 2 : h.precio
+      const precio = Number(h.precio) * multiplicador
       total += precio
 
       const reserva = await client.query(
-        `INSERT INTO reservas 
+        `INSERT INTO reservas
          (usuario_id, horario_id, fecha_inicio, fecha_fin, tipo, total)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
@@ -95,7 +124,7 @@ if (superposicion.rows.length > 0) {
       )
 
       await client.query(
-        `UPDATE horarios 
+        `UPDATE horarios
          SET cupos_disponibles = cupos_disponibles - 1
          WHERE id = $1`,
         [horario_id]
@@ -118,8 +147,7 @@ if (superposicion.rows.length > 0) {
 
   } catch (error) {
     await client.query('ROLLBACK')
-    console.error(error)
-    res.status(400).json({ error: error.message || 'Error al crear la reserva' })
+    responderError(res, error, 'No se pudo crear la reserva')
   } finally {
     client.release()
   }
@@ -130,7 +158,7 @@ export const obtenerMisReservas = async (req, res) => {
 
   try {
     const resultado = await pool.query(
-      `SELECT 
+      `SELECT
         r.*,
         c.nombre AS clase,
         c.rama,
@@ -163,22 +191,34 @@ export const cancelarReserva = async (req, res) => {
   try {
     await client.query('BEGIN')
 
+    // FOR UPDATE es lo que evita que dos cancelaciones simultáneas de la
+    // misma reserva devuelvan el cupo dos veces.
     const reserva = await client.query(
-      'SELECT * FROM reservas WHERE id = $1 AND usuario_id = $2',
+      'SELECT * FROM reservas WHERE id = $1 AND usuario_id = $2 FOR UPDATE',
       [id, usuario_id]
     )
 
     if (reserva.rows.length === 0) {
-      throw new Error('Reserva no encontrada')
+      throw errorDeNegocio('Reserva no encontrada')
     }
 
-    if (reserva.rows[0].estado === 'pagado') {
-      throw new Error('No podés cancelar una reserva ya pagada')
+    const estado = reserva.rows[0].estado
+
+    // Sin este control se podía cancelar la misma reserva una y otra vez, y
+    // cada llamada sumaba un cupo que no existía.
+    if (estado === 'cancelado') {
+      throw errorDeNegocio('Esta reserva ya estaba cancelada')
     }
 
+    if (estado === 'pagado') {
+      throw errorDeNegocio('No podés cancelar una reserva ya pagada')
+    }
+
+    // LEAST es el cinturón de seguridad: el cupo devuelto nunca puede dejar
+    // el horario con más lugares de los que tiene.
     await client.query(
-      `UPDATE horarios 
-       SET cupos_disponibles = cupos_disponibles + 1
+      `UPDATE horarios
+       SET cupos_disponibles = LEAST(cupos_disponibles + 1, cupos_totales)
        WHERE id = $1`,
       [reserva.rows[0].horario_id]
     )
@@ -198,7 +238,7 @@ export const cancelarReserva = async (req, res) => {
 
   } catch (error) {
     await client.query('ROLLBACK')
-    res.status(400).json({ error: error.message })
+    responderError(res, error, 'No se pudo cancelar la reserva')
   } finally {
     client.release()
   }
@@ -209,9 +249,9 @@ export const obtenerHorariosReservados = async (req, res) => {
 
   try {
     const resultado = await pool.query(
-      `SELECT DISTINCT horario_id 
-       FROM reservas 
-       WHERE usuario_id = $1 
+      `SELECT DISTINCT horario_id
+       FROM reservas
+       WHERE usuario_id = $1
        AND estado NOT IN ('cancelado')`,
       [usuario_id]
     )
