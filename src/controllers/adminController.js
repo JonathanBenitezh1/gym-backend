@@ -2,6 +2,8 @@ import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
 import { validarHorario } from '../utils/validaciones.js'
+import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
+import { olvidarUsuario } from '../middlewares/authMiddleware.js'
 
 // ─── CLASES ───────────────────────────────────────────
 
@@ -15,8 +17,14 @@ export const crearClase = async (req, res) => {
        RETURNING *`,
       [nombre, rama, profesor_id, descripcion, duracion]
     )
+
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'clase.crear', entidad: 'clase',
+      entidad_id: resultado.rows[0].id, detalle: { nombre }
+    })
+
     const io = req.app.get('io')
-      io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
+    io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.status(201).json(resultado.rows[0])
   } catch (error) {
     console.error(error)
@@ -69,6 +77,7 @@ export const editarClase = async (req, res) => {
 
     // Se guardan aca para poder avisarles despues del commit.
     const usuariosAfectados = new Set()
+    let canceladas = 0
 
     if (seDesactivo) {
       // Obtenemos las reservas pendientes de esta clase
@@ -81,6 +90,7 @@ export const editarClase = async (req, res) => {
 
       for (const reserva of reservasPendientes.rows) {
         usuariosAfectados.add(reserva.usuario_id)
+        canceladas++
 
         // Devolvemos el cupo, sin pasarnos del total del horario.
         await client.query(
@@ -95,6 +105,14 @@ export const editarClase = async (req, res) => {
         )
       }
     }
+
+    await registrarActividad(client, {
+      usuario_id: req.usuario.id,
+      accion: seDesactivo ? 'clase.desactivar' : 'clase.editar',
+      entidad: 'clase',
+      entidad_id: Number(id),
+      detalle: seDesactivo ? { nombre, reservas_canceladas: canceladas } : { nombre }
+    })
 
     await client.query('COMMIT')
 
@@ -123,7 +141,14 @@ export const editarClase = async (req, res) => {
 export const eliminarClase = async (req, res) => {
   const { id } = req.params
   try {
-    await pool.query('DELETE FROM clases WHERE id = $1', [id])
+    const borrada = await pool.query('DELETE FROM clases WHERE id = $1 RETURNING nombre', [id])
+
+    if (borrada.rows.length > 0) {
+      anotarActividad({
+        usuario_id: req.usuario.id, accion: 'clase.eliminar', entidad: 'clase',
+        entidad_id: Number(id), detalle: { nombre: borrada.rows[0].nombre }
+      })
+    }
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.json({ mensaje: 'Clase eliminada correctamente' })
@@ -167,6 +192,12 @@ export const crearHorario = async (req, res) => {
        RETURNING *`,
       [clase_id, dia_semana, hora_inicio, hora_fin, cupos_totales, precio]
     )
+
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'horario.crear', entidad: 'horario',
+      entidad_id: resultado.rows[0].id, detalle: { dia_semana, hora_inicio, precio }
+    })
+
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
     res.status(201).json(resultado.rows[0])
@@ -216,6 +247,14 @@ export const editarHorario = async (req, res) => {
       [dia_semana, hora_inicio, hora_fin,
        cupos_totales, cupos_disponibles, precio, activo, id]
     )
+
+    if (resultado.rows.length > 0) {
+      anotarActividad({
+        usuario_id: req.usuario.id, accion: 'horario.editar', entidad: 'horario',
+        entidad_id: Number(id), detalle: { dia_semana, hora_inicio, precio }
+      })
+    }
+
     res.json(resultado.rows[0])
   } catch (error) {
     console.error(error)
@@ -226,7 +265,17 @@ export const editarHorario = async (req, res) => {
 export const eliminarHorario = async (req, res) => {
   const { id } = req.params
   try {
-    await pool.query('DELETE FROM horarios WHERE id = $1', [id])
+    const borrado = await pool.query(
+      'DELETE FROM horarios WHERE id = $1 RETURNING dia_semana, hora_inicio',
+      [id]
+    )
+
+    if (borrado.rows.length > 0) {
+      anotarActividad({
+        usuario_id: req.usuario.id, accion: 'horario.eliminar', entidad: 'horario',
+        entidad_id: Number(id), detalle: borrado.rows[0]
+      })
+    }
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.json({ mensaje: 'Horario eliminado correctamente' })
@@ -241,7 +290,7 @@ export const eliminarHorario = async (req, res) => {
 export const obtenerUsuarios = async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, dni, rol, created_at
+      `SELECT id, nombre, email, dni, telefono, rol, activo, created_at
        FROM usuarios ORDER BY created_at DESC`
     )
     res.json(resultado.rows)
@@ -290,6 +339,14 @@ export const restablecerPassword = async (req, res) => {
       [hash, id]
     )
 
+    // La marca de contraseña temporal tiene que regir desde el próximo pedido.
+    olvidarUsuario(id)
+
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'usuario.restablecer_password',
+      entidad: 'usuario', entidad_id: Number(id), afectado_id: Number(id)
+    })
+
     res.json({
       mensaje: 'Contraseña restablecida',
       usuario: usuario.rows[0],
@@ -336,7 +393,7 @@ export const cambiarRol = async (req, res) => {
     // Tampoco se puede dejar el gimnasio sin ningun administrador.
     if (objetivo.rows[0].rol === 'admin' && rol !== 'admin') {
       const otros = await client.query(
-        `SELECT COUNT(*)::int AS total FROM usuarios WHERE rol = 'admin' AND id <> $1`,
+        `SELECT COUNT(*)::int AS total FROM usuarios WHERE rol = 'admin' AND activo AND id <> $1`,
         [id]
       )
       if (otros.rows[0].total === 0) {
@@ -352,7 +409,22 @@ export const cambiarRol = async (req, res) => {
       [rol, id]
     )
 
+    await registrarActividad(client, {
+      usuario_id: req.usuario.id, accion: 'usuario.rol', entidad: 'usuario',
+      entidad_id: Number(id), afectado_id: Number(id),
+      detalle: { antes: objetivo.rows[0].rol, despues: rol }
+    })
+
     await client.query('COMMIT')
+
+    // El cambio rige desde el próximo pedido, sin esperar a que venza el token.
+    olvidarUsuario(id)
+
+    // Y en el tiempo real: entra o sale de la sala del panel sin reconectarse.
+    const io = req.app.get('io')
+    if (rol === 'admin') io.in(`usuario:${id}`).socketsJoin('admins')
+    else io.in(`usuario:${id}`).socketsLeave('admins')
+
     res.json(resultado.rows[0])
   } catch (error) {
     await client.query('ROLLBACK')
@@ -363,12 +435,92 @@ export const cambiarRol = async (req, res) => {
   }
 }
 
+/**
+ * Dar de baja o reactivar a alguien, sin borrarlo.
+ *
+ * Antes no había forma de cortarle el acceso a un profe que dejó el gimnasio
+ * ni a un socio, salvo tocar la base a mano. La baja conserva el historial:
+ * reservas, pagos y rutinas quedan como estaban.
+ */
+export const cambiarEstadoUsuario = async (req, res) => {
+  const { id } = req.params
+  const { activo } = req.body
+
+  if (typeof activo !== 'boolean') {
+    return res.status(400).json({ error: 'Indicá si el usuario queda activo o dado de baja' })
+  }
+
+  if (Number(id) === req.usuario.id && !activo) {
+    return res.status(400).json({ error: 'No podés darte de baja a vos mismo' })
+  }
+
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    const objetivo = await client.query(
+      'SELECT id, nombre, rol, activo FROM usuarios WHERE id = $1 FOR UPDATE',
+      [id]
+    )
+
+    if (objetivo.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'Usuario no encontrado' })
+    }
+
+    const u = objetivo.rows[0]
+
+    if (u.activo === activo) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: activo ? 'Ya estaba activo' : 'Ya estaba dado de baja' })
+    }
+
+    // Igual que con el rol: el gimnasio no puede quedar sin un admin activo.
+    if (!activo && u.rol === 'admin') {
+      const otros = await client.query(
+        `SELECT COUNT(*)::int AS total FROM usuarios
+         WHERE rol = 'admin' AND activo AND id <> $1`,
+        [id]
+      )
+      if (otros.rows[0].total === 0) {
+        await client.query('ROLLBACK')
+        return res.status(400).json({
+          error: 'Es el único administrador activo. Nombrá otro antes de darlo de baja'
+        })
+      }
+    }
+
+    await client.query('UPDATE usuarios SET activo = $1 WHERE id = $2', [activo, id])
+
+    await registrarActividad(client, {
+      usuario_id: req.usuario.id,
+      accion: activo ? 'usuario.reactivar' : 'usuario.baja',
+      entidad: 'usuario', entidad_id: Number(id), afectado_id: Number(id)
+    })
+
+    await client.query('COMMIT')
+
+    // La baja corta el acceso en el próximo pedido y el tiempo real ya mismo.
+    olvidarUsuario(id)
+    if (!activo) req.app.get('io').in(`usuario:${id}`).disconnectSockets(true)
+
+    res.json({ id: u.id, nombre: u.nombre, activo })
+  } catch (error) {
+    await client.query('ROLLBACK')
+    console.error(error)
+    res.status(500).json({ error: 'No se pudo cambiar el estado del usuario' })
+  } finally {
+    client.release()
+  }
+}
+
 // ─── RESERVAS Y PAGOS ─────────────────────────────────
 
 export const obtenerReservas = async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT r.*, u.nombre AS alumno, u.dni,
+      `SELECT r.*, u.nombre AS alumno, u.dni, u.telefono,
               c.nombre AS clase, h.dia_semana, h.hora_inicio,
               p.metodo, p.estado AS estado_pago
        FROM reservas r
@@ -433,6 +585,16 @@ export const confirmarPagoEfectivo = async (req, res) => {
 
     await client.query(`UPDATE reservas SET estado='pagado' WHERE id=$1`, [id])
 
+    await registrarActividad(client, {
+      usuario_id: req.usuario.id, accion: 'pago.confirmar', entidad: 'reserva',
+      entidad_id: Number(id), afectado_id: reserva.rows[0].usuario_id,
+      detalle: {
+        monto: reserva.rows[0].total,
+        metodo: 'efectivo',
+        sin_aviso_previo: pagoPrevio.rows.length === 0
+      }
+    })
+
     await client.query('COMMIT')
 
     // Al socio que pago y al panel. Antes se anunciaba a todos, asi que
@@ -456,7 +618,7 @@ export const obtenerProfesores = async (req, res) => {
     const resultado = await pool.query(
       `SELECT id, nombre, email, dni 
        FROM usuarios 
-       WHERE rol = 'profesor' OR rol = 'profesional'
+       WHERE (rol = 'profesor' OR rol = 'profesional') AND activo
        ORDER BY nombre`
     )
     res.json(resultado.rows)
@@ -487,5 +649,31 @@ export const verificarClaseAntesDeshabilitar = async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al verificar la clase' })
+  }
+}
+
+// ─── ACTIVIDAD ────────────────────────────────────────
+
+/** Últimos movimientos, con el nombre de quién lo hizo y de a quién afectó. */
+export const obtenerActividad = async (req, res) => {
+  const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 100, 1), 300)
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT a.id, a.accion, a.entidad, a.entidad_id, a.detalle, a.creado_en,
+              quien.nombre    AS quien,
+              quien.rol       AS rol_quien,
+              afectado.nombre AS afectado
+       FROM auditoria a
+       LEFT JOIN usuarios quien    ON quien.id = a.usuario_id
+       LEFT JOIN usuarios afectado ON afectado.id = a.afectado_id
+       ORDER BY a.creado_en DESC
+       LIMIT $1`,
+      [limite]
+    )
+    res.json(rows)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'No se pudo cargar la actividad' })
   }
 }

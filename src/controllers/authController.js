@@ -88,8 +88,14 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' })
     }
 
-    // La marca viaja dentro del token para que el servidor pueda exigir el
-    // cambio sin consultar la base en cada pedido.
+    // Una baja corta el acceso de verdad. Se controla después de la contraseña
+    // para que nadie averigüe quién está dado de baja probando emails.
+    if (usuario.activo === false) {
+      return res.status(403).json({ error: 'Tu usuario está dado de baja. Consultá en el gimnasio.' })
+    }
+
+    // El rol y la marca siguen yendo en el token, pero el servidor ya no les
+    // cree: los vuelve a leer de la base en cada pedido.
     const debeCambiar = usuario.debe_cambiar_password === true
 
     const token = jwt.sign(

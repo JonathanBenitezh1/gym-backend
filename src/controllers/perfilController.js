@@ -2,6 +2,7 @@ import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { validarDatosUsuario } from '../utils/validaciones.js'
+import { olvidarUsuario } from '../middlewares/authMiddleware.js'
 
 export const obtenerPerfil = async (req, res) => {
   const id = req.usuario.id
@@ -117,6 +118,9 @@ export const cambiarPassword = async (req, res) => {
       'UPDATE usuarios SET password=$1, debe_cambiar_password=false WHERE id=$2',
       [hashed, id]
     )
+
+    // Sin esto la marca de contraseña temporal seguiría unos segundos en memoria.
+    olvidarUsuario(id)
 
     // El token viejo sigue diciendo que el cambio esta pendiente, asi que
     // devolvemos uno nuevo: sin esto la app quedaria trabada en la pantalla

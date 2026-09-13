@@ -1,5 +1,6 @@
 import pool from '../db/conexion.js'
 import { validarPedidoDeReserva } from '../utils/validaciones.js'
+import { registrarActividad } from '../utils/auditoria.js'
 
 /**
  * Error con un mensaje pensado para mostrarle a la persona.
@@ -228,6 +229,12 @@ export const cancelarReserva = async (req, res) => {
       `UPDATE reservas SET estado = 'cancelado' WHERE id = $1`,
       [id]
     )
+
+    await registrarActividad(client, {
+      usuario_id, accion: 'reserva.cancelar', entidad: 'reserva',
+      entidad_id: Number(id), afectado_id: usuario_id,
+      detalle: { monto: reserva.rows[0].total }
+    })
 
     await client.query('COMMIT')
 

@@ -1,4 +1,5 @@
 import pool from '../db/conexion.js'
+import { anotarActividad } from '../utils/auditoria.js'
 
 const METODOS_VALIDOS = ['efectivo', 'mercadopago']
 
@@ -47,6 +48,12 @@ export const registrarPagoEfectivo = async (req, res) => {
        RETURNING *`,
       [reserva_id, monto, metodo]
     )
+
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'pago.registrar', entidad: 'reserva',
+      entidad_id: Number(reserva_id), afectado_id: req.usuario.id,
+      detalle: { monto, metodo }
+    })
 
     // Avisamos al panel en tiempo real
     // Solo al panel: el monto no tiene por que verlo el resto de los socios.

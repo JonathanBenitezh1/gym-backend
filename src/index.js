@@ -15,6 +15,8 @@ import pagosRoutes from './routes/pagosRoutes.js'
 import profesorRoutes from './routes/profesorRoutes.js'
 import perfilRoutes from './routes/perfilRoutes.js'
 import asistenciaRoutes from './routes/asistenciaRoutes.js'
+import presenciaRoutes from './routes/presenciaRoutes.js'
+import { leerUsuario } from './middlewares/authMiddleware.js'
 
 dotenv.config()
 
@@ -78,6 +80,7 @@ app.use('/api/pagos',      pagosRoutes)
 app.use('/api/profesor',   profesorRoutes)
 app.use('/api/perfil',     perfilRoutes)
 app.use('/api/asistencia', asistenciaRoutes)
+app.use('/api/presencia',  presenciaRoutes)
 
 app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })
@@ -115,7 +118,7 @@ app.use((error, req, res, next) => {
  * Antes cualquiera podia conectarse sin credenciales y escuchar todo lo que
  * el servidor emitia, incluidos ids de usuario y montos de pago.
  */
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token
 
   if (!token) {
@@ -123,7 +126,14 @@ io.use((socket, next) => {
   }
 
   try {
-    socket.data.usuario = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
+    const datos = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
+
+    // Como en la API, el rol sale de la base: un rol cambiado o una baja
+    // rigen también para el tiempo real.
+    const usuario = await leerUsuario(datos.id)
+    if (!usuario || !usuario.activo) return next(new Error('Usuario sin acceso'))
+
+    socket.data.usuario = { id: usuario.id, rol: usuario.rol }
     next()
   } catch {
     next(new Error('Token invalido o expirado'))

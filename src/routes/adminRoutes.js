@@ -5,7 +5,7 @@ import {
   crearHorario, editarHorario, eliminarHorario, obtenerHorariosAdmin,
   obtenerUsuarios, cambiarRol, restablecerPassword,
   obtenerReservas, confirmarPagoEfectivo,
-  obtenerProfesores
+  obtenerProfesores, cambiarEstadoUsuario, obtenerActividad
 } from '../controllers/adminController.js'
 import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.js'
 
@@ -31,9 +31,13 @@ router.delete('/horarios/:id', eliminarHorario)
 router.get('/usuarios', obtenerUsuarios)
 router.put('/usuarios/:id/rol', cambiarRol)
 router.put('/usuarios/:id/restablecer-password', restablecerPassword)
+router.put('/usuarios/:id/estado', cambiarEstadoUsuario)
 
 // Reservas y pagos
 router.get('/reservas', obtenerReservas)
 router.put('/reservas/:id/confirmar-pago', confirmarPagoEfectivo)
 router.get('/clases/:id/verificar', verificarClaseAntesDeshabilitar)
+
+// Registro de actividad
+router.get('/actividad', obtenerActividad)
 export default router
