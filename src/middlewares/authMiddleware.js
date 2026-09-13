@@ -9,31 +9,55 @@ import pool from '../db/conexion.js'
  * baja le seguirían valiendo los permisos viejos hasta una semana. Por eso
  * cada pedido mira la base.
  *
- * La memoria de 15 segundos existe porque la API está en Virginia y la base
- * en São Paulo: sin ella, cada pedido sumaría ese viaje. Cuando algo cambia
- * desde el panel (rol, baja, contraseña) se borra al instante con
- * `olvidarUsuario`, así que nunca demora un cambio hecho desde la app.
+ * La memoria de un minuto existe porque la API está en Virginia y la base en
+ * São Paulo: sin ella, cada pedido sumaría ese viaje. Cuando algo cambia desde
+ * el panel (rol, baja, contraseña) se borra al instante con `olvidarUsuario`,
+ * así que nunca demora un cambio hecho desde la app. Solo un cambio hecho a
+ * mano en la base puede tardar hasta un minuto en regir.
  */
-const MEMORIA_MS = 15 * 1000
+const MEMORIA_MS = 60 * 1000
 const memoria = new Map()
 
+// Lecturas en curso. El panel pide cinco cosas a la vez al entrar: sin esto,
+// las cinco encontraban la memoria vacía y hacían cinco consultas iguales.
+const enCurso = new Map()
+
+// Sube cada vez que se olvida a un usuario. Una lectura que arrancó antes de
+// un cambio no puede guardar lo que leyó: sería el dato viejo.
+const version = new Map()
+
 export function olvidarUsuario(id) {
-  memoria.delete(Number(id))
+  const clave = Number(id)
+  memoria.delete(clave)
+  enCurso.delete(clave)
+  version.set(clave, (version.get(clave) || 0) + 1)
 }
 
-export async function leerUsuario(id) {
+export function leerUsuario(id) {
   const clave = Number(id)
+
   const guardado = memoria.get(clave)
-  if (guardado && guardado.vence > Date.now()) return guardado.datos
+  if (guardado && guardado.vence > Date.now()) return Promise.resolve(guardado.datos)
 
-  const { rows } = await pool.query(
-    'SELECT id, rol, activo, debe_cambiar_password FROM usuarios WHERE id = $1',
-    [clave]
-  )
+  if (enCurso.has(clave)) return enCurso.get(clave)
 
-  const datos = rows[0] || null
-  memoria.set(clave, { datos, vence: Date.now() + MEMORIA_MS })
-  return datos
+  const versionAlEmpezar = version.get(clave) || 0
+
+  const lectura = pool
+    .query('SELECT id, rol, activo, debe_cambiar_password FROM usuarios WHERE id = $1', [clave])
+    .then(({ rows }) => {
+      const datos = rows[0] || null
+      if ((version.get(clave) || 0) === versionAlEmpezar) {
+        memoria.set(clave, { datos, vence: Date.now() + MEMORIA_MS })
+      }
+      return datos
+    })
+    .finally(() => {
+      if (enCurso.get(clave) === lectura) enCurso.delete(clave)
+    })
+
+  enCurso.set(clave, lectura)
+  return lectura
 }
 
 // Verifica el token y contrasta al usuario contra la base.

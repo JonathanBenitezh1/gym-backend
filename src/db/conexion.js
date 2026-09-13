@@ -14,14 +14,24 @@ const necesitaSSL = url
   ? !/@(localhost|127\.0\.0\.1|[^@/]*\.railway\.internal)[:/]/.test(url)
   : false
 
-// Neon apaga la base cuando nadie la usa, y al apagarse corta las conexiones
-// que el pool tenía guardadas en espera. Soltamos las ociosas a los 10
-// segundos para que casi nunca haya una abierta cuando eso pasa.
+// Cuánto se guarda una conexión ociosa antes de soltarla.
+//
+// Abrir una conexión nueva de la API (Virginia) a la base (São Paulo) cuesta
+// cerca de 0,7 segundos: TCP, TLS y autenticación cruzando el continente.
+// Medido en producción el 13/09/2026: la misma consulta tardó 1,05 s después
+// de 13 segundos sin uso y 0,35 s con la conexión abierta. Con los 10 segundos
+// de antes, casi cada click del panel pagaba ese costo.
+//
+// El techo son los 5 minutos sin uso tras los que Neon apaga la base y corta
+// sus conexiones. Con 4 minutos el pool las suelta antes, y si igual se corta
+// alguna, el handler de 'error' de más abajo la descarta.
+const OCIOSA_MS = 4 * 60 * 1000
 const opciones = url
   ? {
       connectionString: url,
       ssl: necesitaSSL ? { rejectUnauthorized: true } : false,
-      idleTimeoutMillis: 10000
+      idleTimeoutMillis: OCIOSA_MS,
+      keepAlive: true
     }
   : {
       host:     process.env.DB_HOST,
@@ -29,7 +39,7 @@ const opciones = url
       database: process.env.DB_NAME,
       user:     process.env.DB_USER,
       password: process.env.DB_PASSWORD,
-      idleTimeoutMillis: 10000
+      idleTimeoutMillis: OCIOSA_MS
     }
 
 const pool = new Pool(opciones)

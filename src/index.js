@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
@@ -51,10 +51,26 @@ app.use(helmet({
 app.use(cors(corsOptions))
 app.use(express.json({ limit: '100kb' }))
 
+/**
+ * La IP real de quien pide, para los límites de intentos.
+ *
+ * Delante de Render está Cloudflare, así que `req.ip` era la IP de salida de
+ * Cloudflare, compartida por toda la gente que entra por el mismo nodo. En
+ * producción se vio a un mismo cliente repartido en dos contadores, y 20
+ * logins fallidos de cualquiera bloqueaban el login de todos los demás.
+ *
+ * Cloudflare manda la IP real en CF-Connecting-IP y pisa cualquier valor que
+ * traiga el pedido. En la PC no hay Cloudflare y se usa `req.ip`.
+ * `ipKeyGenerator` agrupa las IPv6 por subred, para que no alcance con rotar
+ * direcciones dentro de la misma conexión.
+ */
+const claveDeCliente = (req) => ipKeyGenerator(req.get('cf-connecting-ip') || req.ip)
+
 // Límite general: evita que un cliente sature la API a pedidos.
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 600,
+  keyGenerator: claveDeCliente,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Demasiadas peticiones. Esperá unos minutos e intentá de nuevo.' }
@@ -64,6 +80,7 @@ app.use('/api', rateLimit({
 const limiteAuth = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  keyGenerator: claveDeCliente,
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
