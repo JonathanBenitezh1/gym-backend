@@ -10,11 +10,13 @@ export const verificarToken = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET)
+    // El algoritmo se fija a propósito: sin esto, la librería acepta el que
+    // venga declarado en el propio token.
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
     req.usuario = decoded // guardamos los datos del usuario en el request
     next() // seguimos al endpoint
   } catch (error) {
-    res.status(403).json({ error: 'Token inválido o expirado' })
+    res.status(401).json({ error: 'Tu sesión venció. Iniciá sesión de nuevo.' })
   }
 }
 

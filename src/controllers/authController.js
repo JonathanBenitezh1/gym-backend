@@ -3,6 +3,11 @@ import jwt from 'jsonwebtoken'
 import pool from '../db/conexion.js'
 import { validarDatosUsuario } from '../utils/validaciones.js'
 
+// Hash descartable contra el que comparar cuando el email no existe. Sin esto,
+// un email desconocido contestaba al instante y uno real recién después de
+// calcular bcrypt: con esa diferencia de tiempo se arma la lista de socios.
+const HASH_SENUELO = bcrypt.hashSync('contraseña que nadie usa', 10)
+
 export const registro = async (req, res) => {
   const { nombre, password, dni, telefono } = req.body
   // Normalizamos el email para que no entren duplicados por mayúsculas
@@ -73,14 +78,13 @@ export const login = async (req, res) => {
       [email]
     )
 
-    if (resultado.rows.length === 0) {
-      return res.status(401).json({ error: 'Email o contraseña incorrectos' })
-    }
-
     const usuario = resultado.rows[0]
-    const passwordValida = await bcrypt.compare(password, usuario.password)
 
-    if (!passwordValida) {
+    // bcrypt corre siempre, exista o no el email, para que el tiempo de
+    // respuesta no delate cuál de los dos falló.
+    const passwordValida = await bcrypt.compare(String(password), usuario?.password || HASH_SENUELO)
+
+    if (!usuario || !passwordValida) {
       return res.status(401).json({ error: 'Email o contraseña incorrectos' })
     }
 

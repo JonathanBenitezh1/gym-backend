@@ -40,8 +40,8 @@ if (faltantes.length > 0) {
   process.exit(1)
 }
 
-if (password.length < 6) {
-  console.error('\n✖ La contraseña debe tener al menos 6 caracteres.\n')
+if (password.length < 8) {
+  console.error('\n✖ La contraseña debe tener al menos 8 caracteres.\n')
   process.exit(1)
 }
 

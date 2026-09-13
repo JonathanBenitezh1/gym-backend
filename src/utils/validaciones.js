@@ -10,7 +10,7 @@ const RE_EMAIL    = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const RE_DNI      = /^\d{7,8}$/
 const RE_TELEFONO = /^\d{10,15}$/
 
-export const LARGO_MINIMO_PASSWORD = 6
+export const LARGO_MINIMO_PASSWORD = 8
 
 export const esEmailValido    = (valor) => RE_EMAIL.test(String(valor || '').trim())
 export const esDniValido      = (valor) => RE_DNI.test(String(valor || '').trim())

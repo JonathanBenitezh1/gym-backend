@@ -83,6 +83,32 @@ app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })
 })
 
+// Una ruta de la API que no existe contesta JSON, no la página HTML de Express.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'No existe esa ruta' })
+})
+
+const MENSAJES_DE_ERROR = {
+  400: 'El cuerpo del pedido no es válido',
+  413: 'El pedido es demasiado grande'
+}
+
+// Cualquier error que se escape de un controlador. Sin esto, Express contesta
+// con su página de error, que en desarrollo muestra el stack trace y rutas del
+// servidor. El detalle queda en los logs, no en la respuesta.
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error)
+
+  // Un JSON mal formado es culpa de quien llama: antes salía como 500 y
+  // parecía que la API estaba rota.
+  const estado = Number(error.status || error.statusCode) || 500
+  if (estado >= 500) console.error('Error no controlado:', error)
+
+  res.status(estado).json({
+    error: MENSAJES_DE_ERROR[estado] || (estado >= 500 ? 'Error interno del servidor' : 'Pedido no válido')
+  })
+})
+
 /**
  * La conexion de tiempo real ahora pide el mismo token que la API.
  *
@@ -97,7 +123,7 @@ io.use((socket, next) => {
   }
 
   try {
-    socket.data.usuario = jwt.verify(token, process.env.JWT_SECRET)
+    socket.data.usuario = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
     next()
   } catch {
     next(new Error('Token invalido o expirado'))
