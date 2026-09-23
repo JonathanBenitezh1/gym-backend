@@ -16,6 +16,7 @@ import profesorRoutes from './routes/profesorRoutes.js'
 import perfilRoutes from './routes/perfilRoutes.js'
 import asistenciaRoutes from './routes/asistenciaRoutes.js'
 import presenciaRoutes from './routes/presenciaRoutes.js'
+import esperaRoutes     from './routes/esperaRoutes.js'
 import { leerUsuario } from './middlewares/authMiddleware.js'
 
 dotenv.config()
@@ -98,6 +99,7 @@ app.use('/api/profesor',   profesorRoutes)
 app.use('/api/perfil',     perfilRoutes)
 app.use('/api/asistencia', asistenciaRoutes)
 app.use('/api/presencia',  presenciaRoutes)
+app.use('/api/espera',     esperaRoutes)
 
 app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })

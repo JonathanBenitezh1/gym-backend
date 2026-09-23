@@ -1,5 +1,6 @@
 import pool from '../db/conexion.js'
 import { validarHorario } from '../utils/validaciones.js'
+import { avisarCupoLibre } from './esperaController.js'
 
 // ─── MIS CLASES Y HORARIOS ────────────────────────────
 
@@ -68,6 +69,7 @@ export const modificarHorario = async (req, res) => {
        WHERE id=$7 RETURNING *`,
       [dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, activo, id]
     )
+    avisarCupoLibre(req.app.get('io'), [Number(id)])
     res.json(resultado.rows[0])
   } catch (error) {
     console.error(error)

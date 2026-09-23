@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
 import { validarHorario } from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
+import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
 
 // ─── CLASES ───────────────────────────────────────────
@@ -253,6 +254,8 @@ export const editarHorario = async (req, res) => {
         usuario_id: req.usuario.id, accion: 'horario.editar', entidad: 'horario',
         entidad_id: Number(id), detalle: { dia_semana, hora_inicio, precio }
       })
+      // Si el admin sumó cupos, los que esperaban se enteran.
+      avisarCupoLibre(req.app.get('io'), [Number(id)])
     }
 
     res.json(resultado.rows[0])

@@ -1,6 +1,7 @@
 import pool from '../db/conexion.js'
 import { validarPedidoDeReserva } from '../utils/validaciones.js'
 import { registrarActividad } from '../utils/auditoria.js'
+import { avisarCupoLibre } from './esperaController.js'
 
 /**
  * Error con un mensaje pensado para mostrarle a la persona.
@@ -134,6 +135,12 @@ export const crearReserva = async (req, res) => {
       reservasCreadas.push(reserva.rows[0])
     }
 
+    // Quien reservó un horario en el que esperaba ya no necesita el aviso.
+    await client.query(
+      'DELETE FROM lista_espera WHERE usuario_id = $1 AND horario_id = ANY($2::int[])',
+      [usuario_id, horarios]
+    )
+
     await client.query('COMMIT')
 
     const io = req.app.get('io')
@@ -242,6 +249,7 @@ export const cancelarReserva = async (req, res) => {
     io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
     // Quien cancela ya lo sabe: este aviso es para que el panel se actualice.
     io.to('admins').emit('reserva_cancelada', { reserva_id: id })
+    avisarCupoLibre(io, [reserva.rows[0].horario_id])
 
     res.json({ mensaje: 'Reserva cancelada correctamente' })
 
