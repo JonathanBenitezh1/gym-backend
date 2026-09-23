@@ -11,6 +11,7 @@ import {
   obtenerMisRutinasComoAlumno
 } from '../controllers/profesorController.js'
 import { obtenerPlantillas, guardarPlantilla, borrarPlantilla } from '../controllers/plantillasController.js'
+import { obtenerProgresoDeAlumno } from '../controllers/progresoController.js'
 
 const router = Router()
 
@@ -22,6 +23,7 @@ router.put('/horarios/:id',        soloProfesor, modificarHorario)
 router.get('/alumnos',            soloProfesor, buscarAlumnos)
 router.get('/alumnos/:dni',        soloProfesor, buscarAlumnoPorDni)
 router.get('/rutinas/:alumno_id',  soloProfesor, obtenerRutinaDeAlumno)
+router.get('/progreso/:alumno_id', soloProfesor, obtenerProgresoDeAlumno)
 router.post('/rutinas',            soloProfesor, guardarRutina)
 router.get('/plantillas',         soloProfesor, obtenerPlantillas)
 router.post('/plantillas',        soloProfesor, guardarPlantilla)
