@@ -95,6 +95,32 @@ export const buscarAlumnoPorDni = async (req, res) => {
   }
 }
 
+// Busca por nombre o por el comienzo del DNI. Antes habia que saber el DNI
+// completo, y en el salon nadie se lo sabe de memoria.
+export const buscarAlumnos = async (req, res) => {
+  const texto = String(req.query.q ?? '').trim()
+  if (texto.length < 2 || texto.length > 60) {
+    return res.status(400).json({ error: 'Escribí al menos 2 letras o números' })
+  }
+  // Se escapan los comodines de LIKE para que un % no traiga a todos.
+  const patron = texto.replace(/[\\%_]/g, c => '\\' + c)
+  try {
+    const resultado = await pool.query(
+      `SELECT id, nombre, email, dni
+       FROM usuarios
+       WHERE rol = 'alumno' AND activo = true
+         AND (nombre ILIKE '%' || $1 || '%' OR dni LIKE $1 || '%')
+       ORDER BY nombre
+       LIMIT 10`,
+      [patron]
+    )
+    res.json(resultado.rows)
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al buscar alumnos' })
+  }
+}
+
 export const obtenerRutinaDeAlumno = async (req, res) => {
   const { alumno_id } = req.params
   const profesor_id = req.usuario.id
@@ -151,27 +177,64 @@ export const obtenerRutinaDeAlumno = async (req, res) => {
 const MAX_SESIONES = 14
 const MAX_EJERCICIOS = 30
 
+/**
+ * Valida y limpia las sesiones de una rutina o de una plantilla.
+ *
+ * El orden sale de la posicion, no del cliente: al quitar una sesion en la
+ * app el orden quedaba salteado. Los ejercicios sin nombre se descartan, y una
+ * serie vacia va como null: antes '' reventaba contra la columna integer y
+ * la rutina no se guardaba.
+ */
+export function normalizarSesiones(sesiones) {
+  if (!Array.isArray(sesiones) || sesiones.length === 0) {
+    return { error: 'La rutina tiene que tener al menos una sesión' }
+  }
+  if (sesiones.length > MAX_SESIONES) {
+    return { error: `La rutina no puede tener más de ${MAX_SESIONES} sesiones` }
+  }
+
+  const limpias = []
+  for (const [i, sesion] of sesiones.entries()) {
+    const nombre = String(sesion?.nombre ?? '').trim()
+    if (!nombre || nombre.length > 100) {
+      return { error: 'Cada sesión necesita un nombre de hasta 100 letras' }
+    }
+    const ejercicios = Array.isArray(sesion.ejercicios) ? sesion.ejercicios : []
+    if (ejercicios.length > MAX_EJERCICIOS) {
+      return { error: `Cada sesión admite hasta ${MAX_EJERCICIOS} ejercicios` }
+    }
+    const largos = ejercicios.some(e =>
+      String(e?.nombre ?? '').length > 100 || String(e?.repeticiones ?? '').length > 50)
+    if (largos) {
+      return { error: 'Nombre de ejercicio o repeticiones demasiado largos' }
+    }
+    limpias.push({
+      nombre,
+      orden: i + 1,
+      ejercicios: ejercicios
+        .filter(e => String(e?.nombre ?? '').trim())
+        .map((e, j) => {
+          const series = Number.parseInt(e.series, 10)
+          return {
+            nombre: String(e.nombre).trim(),
+            series: Number.isInteger(series) && series > 0 && series <= 99 ? series : null,
+            repeticiones: String(e.repeticiones ?? '').trim() || null,
+            orden: j + 1
+          }
+        })
+    })
+  }
+  return { sesiones: limpias }
+}
+
 export const guardarRutina = async (req, res) => {
   const profesor_id = req.usuario.id
-  const { alumno_id, sesiones } = req.body
+  const { alumno_id } = req.body
 
-  if (!Array.isArray(sesiones) || sesiones.length === 0) {
-    return res.status(400).json({ error: 'La rutina tiene que tener al menos una sesión' })
+  const { error: errorSesiones, sesiones } = normalizarSesiones(req.body.sesiones)
+  if (errorSesiones) {
+    return res.status(400).json({ error: errorSesiones })
   }
-
-  if (sesiones.length > MAX_SESIONES) {
-    return res.status(400).json({ error: `La rutina no puede tener más de ${MAX_SESIONES} sesiones` })
-  }
-
-  for (const sesion of sesiones) {
-    if (Array.isArray(sesion?.ejercicios) && sesion.ejercicios.length > MAX_EJERCICIOS) {
-      return res.status(400).json({
-        error: `Cada sesión admite hasta ${MAX_EJERCICIOS} ejercicios`
-      })
-    }
-  }
-
-  // sesiones es un array de { nombre, orden, ejercicios: [{ nombre, series, repeticiones, orden }] }
 
   const client = await pool.connect()
 
@@ -214,7 +277,6 @@ export const guardarRutina = async (req, res) => {
       rutina_id = nueva.rows[0].id
     }
 
-    // Insertamos sesiones y ejercicios
     for (const sesion of sesiones) {
       const nuevaSesion = await client.query(
         'INSERT INTO sesiones (rutina_id, nombre, orden) VALUES ($1, $2, $3) RETURNING id',
@@ -222,7 +284,7 @@ export const guardarRutina = async (req, res) => {
       )
       const sesion_id = nuevaSesion.rows[0].id
 
-      for (const ejercicio of sesion.ejercicios || []) {
+      for (const ejercicio of sesion.ejercicios) {
         await client.query(
           'INSERT INTO ejercicios (sesion_id, nombre, series, repeticiones, orden) VALUES ($1, $2, $3, $4, $5)',
           [sesion_id, ejercicio.nombre, ejercicio.series, ejercicio.repeticiones, ejercicio.orden]

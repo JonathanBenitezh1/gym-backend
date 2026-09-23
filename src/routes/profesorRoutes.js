@@ -5,6 +5,7 @@ import {
   obtenerMisHorarios,
   modificarHorario,
   buscarAlumnoPorDni,
+  buscarAlumnos,
   obtenerRutinaDeAlumno,
   guardarRutina,
   obtenerMisRutinasComoAlumno
@@ -17,6 +18,7 @@ router.use(verificarToken, exigirPasswordPropia)
 router.get('/mis-clases',          soloProfesor, obtenerMisClases)
 router.get('/mis-horarios',        soloProfesor, obtenerMisHorarios)
 router.put('/horarios/:id',        soloProfesor, modificarHorario)
+router.get('/alumnos',            soloProfesor, buscarAlumnos)
 router.get('/alumnos/:dni',        soloProfesor, buscarAlumnoPorDni)
 router.get('/rutinas/:alumno_id',  soloProfesor, obtenerRutinaDeAlumno)
 router.post('/rutinas',            soloProfesor, guardarRutina)
