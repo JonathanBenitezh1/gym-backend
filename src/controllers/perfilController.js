@@ -8,7 +8,8 @@ export const obtenerPerfil = async (req, res) => {
   const id = req.usuario.id
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, dni, telefono, rol, created_at, debe_cambiar_password
+      `SELECT id, nombre, email, dni, telefono, rol, created_at, debe_cambiar_password,
+              to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence
        FROM usuarios WHERE id = $1`,
       [id]
     )

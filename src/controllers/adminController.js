@@ -293,13 +293,62 @@ export const eliminarHorario = async (req, res) => {
 export const obtenerUsuarios = async (req, res) => {
   try {
     const resultado = await pool.query(
-      `SELECT id, nombre, email, dni, telefono, rol, activo, created_at
+      // La fecha va como texto: pg la convierte a Date en hora del servidor
+      // y el JSON la corre un día.
+      `SELECT id, nombre, email, dni, telefono, rol, activo, created_at,
+              to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence
        FROM usuarios ORDER BY created_at DESC`
     )
     res.json(resultado.rows)
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al obtener usuarios' })
+  }
+}
+
+// ─── APTO MÉDICO ──────────────────────────────────────
+
+const RE_FECHA_APTO = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Carga o borra el vencimiento del apto médico. `vence: null` lo borra.
+ * Se aceptan fechas pasadas: sirve para registrar un apto que ya venció.
+ */
+export const cambiarApto = async (req, res) => {
+  const id = Number(req.params.id)
+  const { vence } = req.body
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Usuario inválido' })
+  }
+
+  if (vence !== null) {
+    const fecha = RE_FECHA_APTO.test(String(vence)) ? new Date(`${vence}T00:00:00Z`) : null
+    // El redondeo de Date convierte 2026-02-31 en marzo: se compara de vuelta.
+    const valida = fecha && !Number.isNaN(fecha.getTime()) && fecha.toISOString().slice(0, 10) === vence
+    const anio = fecha?.getUTCFullYear()
+    const tope = new Date().getUTCFullYear() + 3
+    if (!valida || anio < 2000 || anio > tope) {
+      return res.status(400).json({ error: `La fecha del apto no es válida (hasta ${tope})` })
+    }
+  }
+
+  try {
+    const resultado = await pool.query(
+      `UPDATE usuarios SET apto_vence = $1 WHERE id = $2
+       RETURNING id, nombre, to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence`,
+      [vence, id]
+    )
+    if (resultado.rows.length === 0) {
+      return res.status(404).json({ error: 'Usuario no encontrado' })
+    }
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'usuario.apto', entidad: 'usuario',
+      entidad_id: id, afectado_id: id, detalle: { vence }
+    })
+    res.json(resultado.rows[0])
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'No se pudo guardar el apto médico' })
   }
 }
 
