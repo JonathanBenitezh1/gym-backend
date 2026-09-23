@@ -8,6 +8,7 @@ import {
   obtenerProfesores, cambiarEstadoUsuario, obtenerActividad, cambiarApto
 } from '../controllers/adminController.js'
 import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.js'
+import { obtenerEstadisticas } from '../controllers/estadisticasController.js'
 
 const router = Router()
 
@@ -41,4 +42,7 @@ router.get('/clases/:id/verificar', verificarClaseAntesDeshabilitar)
 
 // Registro de actividad
 router.get('/actividad', obtenerActividad)
+
+// Estadisticas del panel
+router.get('/estadisticas', obtenerEstadisticas)
 export default router
