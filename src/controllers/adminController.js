@@ -1,7 +1,7 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
-import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
+import { validarHorario, ORDEN_DIA, validarDatosUsuario } from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
@@ -301,7 +301,8 @@ export const obtenerUsuarios = async (req, res) => {
       // y el JSON la corre un día.
       `SELECT id, nombre, email, dni, telefono, rol, activo, created_at,
               to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence,
-              EXISTS (SELECT 1 FROM fotos_socio f WHERE f.usuario_id = usuarios.id) AS tiene_foto
+              EXISTS (SELECT 1 FROM fotos_socio f WHERE f.usuario_id = usuarios.id) AS tiene_foto,
+              cuenta_puerta
        FROM usuarios ORDER BY created_at DESC`
     )
     res.json(resultado.rows)
@@ -442,13 +443,19 @@ export const cambiarRol = async (req, res) => {
     await client.query('BEGIN')
 
     const objetivo = await client.query(
-      'SELECT id, rol FROM usuarios WHERE id = $1 FOR UPDATE',
+      'SELECT id, rol, cuenta_puerta FROM usuarios WHERE id = $1 FOR UPDATE',
       [id]
     )
 
     if (objetivo.rows.length === 0) {
       await client.query('ROLLBACK')
       return res.status(404).json({ error: 'Usuario no encontrado' })
+    }
+
+    // La cuenta de la puerta no es de una persona: solo sirve como recepción.
+    if (objetivo.rows[0].cuenta_puerta && rol !== 'recepcion') {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'La cuenta de la puerta solo puede ser de recepción' })
     }
 
     // Tampoco se puede dejar el gimnasio sin ningun administrador.
@@ -736,5 +743,72 @@ export const obtenerActividad = async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'No se pudo cargar la actividad' })
+  }
+}
+// ─── CUENTA DE LA PUERTA ──────────────────────────────
+
+/**
+ * Cuenta fija para la PC de la entrada: rol recepción, sin DNI, sesión de 6
+ * meses. No es de ninguna persona, así que no aparece en la lista de la
+ * puerta ni en las cuotas. La contraseña la elige el admin en el panel.
+ */
+export const crearCuentaPuerta = async (req, res) => {
+  const nombre = String(req.body.nombre ?? '').trim() || 'Puerta'
+  const email = String(req.body.email ?? '').trim().toLowerCase()
+  const { password } = req.body
+
+  const error = validarDatosUsuario({ nombre, email, password })
+  if (error) return res.status(400).json({ error })
+
+  try {
+    const existe = await pool.query('SELECT 1 FROM usuarios WHERE email = $1', [email])
+    if (existe.rows.length > 0) {
+      return res.status(400).json({ error: 'Ya hay una cuenta con ese email' })
+    }
+    const hash = await bcrypt.hash(String(password), 10)
+    const r = await pool.query(
+      `INSERT INTO usuarios (nombre, email, password, dni, telefono, rol, cuenta_puerta)
+       VALUES ($1, $2, $3, NULL, NULL, 'recepcion', true)
+       RETURNING id, nombre, email, rol, cuenta_puerta`,
+      [nombre, email, hash]
+    )
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'puerta.crear', entidad: 'usuario',
+      entidad_id: r.rows[0].id, afectado_id: r.rows[0].id, detalle: { nombre }
+    })
+    res.status(201).json(r.rows[0])
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'No se pudo crear la cuenta de la puerta' })
+  }
+}
+
+/**
+ * Cierra todas las sesiones abiertas de un usuario, sin cambiarle la
+ * contraseña: el teléfono que se perdió, la PC de la puerta que se cambió.
+ * El próximo pedido de esas sesiones da 401 y el tiempo real se corta ya.
+ */
+export const cerrarSesionesUsuario = async (req, res) => {
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Usuario inválido' })
+  if (id === req.usuario.id) {
+    return res.status(400).json({ error: 'Para cerrar tu propia sesión usá el botón de salir' })
+  }
+  try {
+    const r = await pool.query(
+      'UPDATE usuarios SET sesion_version = sesion_version + 1 WHERE id = $1 RETURNING nombre',
+      [id]
+    )
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' })
+    olvidarUsuario(id)
+    req.app.get('io').in(`usuario:${id}`).disconnectSockets(true)
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'usuario.cerrar_sesiones', entidad: 'usuario',
+      entidad_id: id, afectado_id: id
+    })
+    res.json({ mensaje: `Se cerraron las sesiones de ${r.rows[0].nombre}` })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'No se pudieron cerrar las sesiones' })
   }
 }

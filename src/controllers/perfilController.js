@@ -1,7 +1,7 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
-import { validarDatosUsuario } from '../utils/validaciones.js'
+import { validarDatosUsuario, duracionSesion } from '../utils/validaciones.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
 
 export const obtenerPerfil = async (req, res) => {
@@ -118,7 +118,7 @@ export const cambiarPassword = async (req, res) => {
     // versión cierra las sesiones abiertas en otros dispositivos.
     const actualizado = await pool.query(
       `UPDATE usuarios SET password=$1, debe_cambiar_password=false, sesion_version = sesion_version + 1
-       WHERE id=$2 RETURNING sesion_version`,
+       WHERE id=$2 RETURNING sesion_version, cuenta_puerta`,
       [hashed, id]
     )
 
@@ -135,7 +135,7 @@ export const cambiarPassword = async (req, res) => {
     const token = jwt.sign(
       { id, rol: req.usuario.rol, debe_cambiar_password: false, ver: actualizado.rows[0].sesion_version },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: duracionSesion(actualizado.rows[0]) }
     )
 
     res.json({ mensaje: 'Contraseña actualizada correctamente', token })

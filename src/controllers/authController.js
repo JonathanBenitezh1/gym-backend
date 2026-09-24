@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import pool from '../db/conexion.js'
-import { validarDatosUsuario } from '../utils/validaciones.js'
+import { duracionSesion, validarDatosUsuario } from '../utils/validaciones.js'
 
 // Hash descartable contra el que comparar cuando el email no existe. Sin esto,
 // un email desconocido contestaba al instante y uno real recién después de
@@ -101,7 +101,7 @@ export const login = async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, rol: usuario.rol, debe_cambiar_password: debeCambiar, ver: usuario.sesion_version },
       process.env.JWT_SECRET,
-      { expiresIn: '7d' }
+      { expiresIn: duracionSesion(usuario) }
     )
 
     res.json({

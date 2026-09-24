@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict ocHzxVu2bxMlnYHDyZrzK4EMou81e7yCW9vy948nBryQ6KmUYSU23YuJJCNzgln
+\restrict sp2NC4myj9DyWnWP8XDpntLZSLFqT3tXDxEakvknDUMwfCqnJ33nyLZgp1SPaeh
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -156,7 +156,7 @@ CREATE TABLE public.config_cuota (
     CONSTRAINT config_cuota_dia_vencimiento_check CHECK (((dia_vencimiento >= 1) AND (dia_vencimiento <= 28))),
     CONSTRAINT config_cuota_dias_gracia_check CHECK (((dias_gracia >= 0) AND (dias_gracia <= 30))),
     CONSTRAINT config_cuota_id_check CHECK ((id = 1)),
-    CONSTRAINT config_cuota_modo_vencimiento_check CHECK (((modo_vencimiento)::text = ANY ((ARRAY['mensual'::character varying, 'dia_fijo'::character varying])::text[]))),
+    CONSTRAINT config_cuota_modo_vencimiento_check CHECK (((modo_vencimiento)::text = ANY (ARRAY[('mensual'::character varying)::text, ('dia_fijo'::character varying)::text]))),
     CONSTRAINT config_cuota_precio_check CHECK ((precio >= (0)::numeric))
 );
 
@@ -207,7 +207,7 @@ CREATE TABLE public.fotos_socio (
     cargada_por integer,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT fotos_socio_imagen_check CHECK ((octet_length(imagen) <= 102400)),
-    CONSTRAINT fotos_socio_tipo_check CHECK (((tipo)::text = ANY ((ARRAY['image/jpeg'::character varying, 'image/webp'::character varying])::text[])))
+    CONSTRAINT fotos_socio_tipo_check CHECK (((tipo)::text = ANY (ARRAY[('image/jpeg'::character varying)::text, ('image/webp'::character varying)::text])))
 );
 
 
@@ -227,7 +227,7 @@ CREATE TABLE public.horarios (
     activo boolean DEFAULT true,
     created_at timestamp without time zone DEFAULT now(),
     CONSTRAINT horarios_cupos_check CHECK (((cupos_totales > 0) AND ((cupos_disponibles >= 0) AND (cupos_disponibles <= cupos_totales)))),
-    CONSTRAINT horarios_dia_semana_check CHECK (((dia_semana)::text = ANY ((ARRAY['Lunes'::character varying, 'Martes'::character varying, 'Miércoles'::character varying, 'Jueves'::character varying, 'Viernes'::character varying, 'Sábado'::character varying, 'Domingo'::character varying])::text[]))),
+    CONSTRAINT horarios_dia_semana_check CHECK (((dia_semana)::text = ANY (ARRAY[('Lunes'::character varying)::text, ('Martes'::character varying)::text, ('Miércoles'::character varying)::text, ('Jueves'::character varying)::text, ('Viernes'::character varying)::text, ('Sábado'::character varying)::text, ('Domingo'::character varying)::text]))),
     CONSTRAINT horarios_horas_check CHECK ((hora_fin > hora_inicio)),
     CONSTRAINT horarios_precio_check CHECK ((precio >= (0)::numeric))
 );
@@ -272,7 +272,7 @@ CREATE TABLE public.ingresos (
     registrado_por integer,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     id_local character varying(40),
-    CONSTRAINT ingresos_resultado_check CHECK (((resultado)::text = ANY ((ARRAY['al_dia'::character varying, 'gracia'::character varying, 'vencida'::character varying, 'sin_cuota'::character varying, 'personal'::character varying, 'baja'::character varying, 'no_registrado'::character varying])::text[])))
+    CONSTRAINT ingresos_resultado_check CHECK (((resultado)::text = ANY (ARRAY[('al_dia'::character varying)::text, ('gracia'::character varying)::text, ('vencida'::character varying)::text, ('sin_cuota'::character varying)::text, ('personal'::character varying)::text, ('baja'::character varying)::text, ('no_registrado'::character varying)::text])))
 );
 
 
@@ -339,8 +339,8 @@ CREATE TABLE public.pagos (
     metodo character varying(50) NOT NULL,
     estado character varying(20) DEFAULT 'pendiente'::character varying,
     created_at timestamp without time zone DEFAULT now(),
-    CONSTRAINT pagos_estado_check CHECK (((estado)::text = ANY ((ARRAY['pendiente'::character varying, 'pagado'::character varying, 'rechazado'::character varying])::text[]))),
-    CONSTRAINT pagos_metodo_check CHECK (((metodo)::text = ANY ((ARRAY['efectivo'::character varying, 'mercadopago'::character varying])::text[]))),
+    CONSTRAINT pagos_estado_check CHECK (((estado)::text = ANY (ARRAY[('pendiente'::character varying)::text, ('pagado'::character varying)::text, ('rechazado'::character varying)::text]))),
+    CONSTRAINT pagos_metodo_check CHECK (((metodo)::text = ANY (ARRAY[('efectivo'::character varying)::text, ('mercadopago'::character varying)::text]))),
     CONSTRAINT pagos_monto_check CHECK ((monto >= (0)::numeric))
 );
 
@@ -360,7 +360,7 @@ CREATE TABLE public.pagos_cuota (
     registrado_por integer,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT pagos_cuota_meses_check CHECK (((meses >= 1) AND (meses <= 12))),
-    CONSTRAINT pagos_cuota_metodo_check CHECK (((metodo)::text = ANY ((ARRAY['efectivo'::character varying, 'transferencia'::character varying, 'mercadopago'::character varying, 'otro'::character varying])::text[]))),
+    CONSTRAINT pagos_cuota_metodo_check CHECK (((metodo)::text = ANY (ARRAY[('efectivo'::character varying)::text, ('transferencia'::character varying)::text, ('mercadopago'::character varying)::text, ('otro'::character varying)::text]))),
     CONSTRAINT pagos_cuota_monto_check CHECK ((monto >= (0)::numeric))
 );
 
@@ -489,9 +489,9 @@ CREATE TABLE public.reservas (
     total numeric(10,2) NOT NULL,
     estado character varying(20) DEFAULT 'pendiente'::character varying,
     created_at timestamp without time zone DEFAULT now(),
-    CONSTRAINT reservas_estado_check CHECK (((estado)::text = ANY ((ARRAY['pendiente'::character varying, 'pagado'::character varying, 'cancelado'::character varying])::text[]))),
+    CONSTRAINT reservas_estado_check CHECK (((estado)::text = ANY (ARRAY[('pendiente'::character varying)::text, ('pagado'::character varying)::text, ('cancelado'::character varying)::text]))),
     CONSTRAINT reservas_fechas_check CHECK ((fecha_fin >= fecha_inicio)),
-    CONSTRAINT reservas_tipo_check CHECK (((tipo)::text = ANY ((ARRAY['semanal'::character varying, 'quincenal'::character varying])::text[]))),
+    CONSTRAINT reservas_tipo_check CHECK (((tipo)::text = ANY (ARRAY[('semanal'::character varying)::text, ('quincenal'::character varying)::text]))),
     CONSTRAINT reservas_total_check CHECK ((total >= (0)::numeric))
 );
 
@@ -624,7 +624,7 @@ CREATE TABLE public.usuarios (
     nombre character varying(100) NOT NULL,
     email character varying(100) NOT NULL,
     password character varying(255) NOT NULL,
-    dni character varying(20) NOT NULL,
+    dni character varying(20),
     telefono character varying(20),
     rol character varying(20) DEFAULT 'alumno'::character varying,
     created_at timestamp without time zone DEFAULT now(),
@@ -633,7 +633,10 @@ CREATE TABLE public.usuarios (
     apto_vence date,
     cuota_vence date,
     sesion_version integer DEFAULT 0 NOT NULL,
-    CONSTRAINT usuarios_rol_check CHECK (((rol)::text = ANY ((ARRAY['alumno'::character varying, 'profesor'::character varying, 'profesional'::character varying, 'admin'::character varying, 'recepcion'::character varying])::text[])))
+    cuenta_puerta boolean DEFAULT false NOT NULL,
+    CONSTRAINT usuarios_dni_o_puerta_check CHECK (((dni IS NOT NULL) OR cuenta_puerta)),
+    CONSTRAINT usuarios_puerta_rol_check CHECK (((NOT cuenta_puerta) OR ((rol)::text = 'recepcion'::text))),
+    CONSTRAINT usuarios_rol_check CHECK (((rol)::text = ANY (ARRAY[('alumno'::character varying)::text, ('profesor'::character varying)::text, ('profesional'::character varying)::text, ('admin'::character varying)::text, ('recepcion'::character varying)::text])))
 );
 
 
@@ -1248,7 +1251,7 @@ ALTER TABLE ONLY public.turnos_profe
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ocHzxVu2bxMlnYHDyZrzK4EMou81e7yCW9vy948nBryQ6KmUYSU23YuJJCNzgln
+\unrestrict sp2NC4myj9DyWnWP8XDpntLZSLFqT3tXDxEakvknDUMwfCqnJ33nyLZgp1SPaeh
 
 
 --

@@ -226,3 +226,10 @@ export function validarPedidoDeReserva({ horarios_ids, tipo, fecha_inicio }) {
     multiplicador: definicion.multiplicador
   }
 }
+
+/**
+ * Cuánto dura la sesión. La cuenta de la puerta queda fija en la PC de la
+ * entrada: con 7 días pediría la clave cada semana. Si hace falta cortarla
+ * antes, el panel sube su sesion_version (migración 010).
+ */
+export const duracionSesion = (usuario) => (usuario?.cuenta_puerta ? '180d' : '7d')
