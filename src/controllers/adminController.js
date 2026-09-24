@@ -1,7 +1,7 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
-import { validarHorario, ORDEN_DIA, validarDatosUsuario } from '../utils/validaciones.js'
+import { validarHorario, validarClase, ORDEN_DIA, validarDatosUsuario } from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
@@ -9,15 +9,24 @@ import { LIBRES, proximoPeriodo } from '../utils/cupos.js'
 
 // ─── CLASES ───────────────────────────────────────────
 
+// La base contesta 23503 cuando el profesor_id no es de ningún usuario.
+const PROFESOR_INEXISTENTE = '23503'
+
 export const crearClase = async (req, res) => {
-  const { nombre, rama, profesor_id, descripcion, duracion } = req.body
+  const { rama, profesor_id = null, descripcion } = req.body
+  const nombre   = req.body.nombre ?? ''
+  const duracion = req.body.duracion ?? 60
+
+  // Nombre y rama van siempre: sin ellos la base contesta con un 500.
+  const error = validarClase({ nombre, rama: rama ?? '', duracion, profesor_id })
+  if (error) return res.status(400).json({ error })
 
   try {
     const resultado = await pool.query(
       `INSERT INTO clases (nombre, rama, profesor_id, descripcion, duracion)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [nombre, rama, profesor_id, descripcion, duracion]
+      [String(nombre).trim(), rama, profesor_id, descripcion, duracion]
     )
 
     anotarActividad({
@@ -29,6 +38,9 @@ export const crearClase = async (req, res) => {
     io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.status(201).json(resultado.rows[0])
   } catch (error) {
+    if (error.code === PROFESOR_INEXISTENTE) {
+      return res.status(400).json({ error: 'El profesor elegido no existe' })
+    }
     console.error(error)
     res.status(500).json({ error: 'Error al crear la clase' })
   }
@@ -36,6 +48,9 @@ export const crearClase = async (req, res) => {
 
 export const editarClase = async (req, res) => {
   const { id } = req.params
+
+  const invalido = validarClase(req.body)
+  if (invalido) return res.status(400).json({ error: invalido })
 
   const client = await pool.connect()
 
@@ -60,7 +75,7 @@ export const editarClase = async (req, res) => {
     // pendientes de la clase sin que nadie lo hubiera pedido.
     const tomar = (campo) => req.body[campo] === undefined ? previa[campo] : req.body[campo]
 
-    const nombre      = tomar('nombre')
+    const nombre      = String(tomar('nombre')).trim()
     const rama        = tomar('rama')
     const profesor_id = tomar('profesor_id')
     const descripcion = tomar('descripcion')
@@ -129,6 +144,9 @@ export const editarClase = async (req, res) => {
     res.json(resultado.rows[0])
   } catch (error) {
     await client.query('ROLLBACK')
+    if (error.code === PROFESOR_INEXISTENTE) {
+      return res.status(400).json({ error: 'El profesor elegido no existe' })
+    }
     console.error(error)
     res.status(500).json({ error: 'Error al editar la clase' })
   } finally {

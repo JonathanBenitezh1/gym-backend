@@ -121,6 +121,43 @@ export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totale
   return null
 }
 
+/** Las mismas que ofrece el panel. */
+export const RAMAS = ['gimnasio', 'disciplina', 'profesional']
+
+/**
+ * Valida una clase antes de crearla o editarla. Igual que con los horarios,
+ * los campos que no vienen no se validan.
+ *
+ * Sin esto una rama o una duración inválidas llegaban a la base, que
+ * contestaba con un 500 genérico, o quedaban guardadas (una duración de
+ * -30 o una rama escrita a mano que ningún filtro de la app muestra).
+ */
+export function validarClase({ nombre, rama, duracion, profesor_id }) {
+  if (nombre !== undefined) {
+    const limpio = String(nombre ?? '').trim()
+    if (limpio.length < 2)   return 'El nombre de la clase es demasiado corto'
+    if (limpio.length > 100) return 'El nombre de la clase es demasiado largo'
+  }
+
+  if (rama !== undefined && !RAMAS.includes(String(rama))) {
+    return 'El tipo de clase tiene que ser gimnasio, disciplina o profesional'
+  }
+
+  if (duracion !== undefined) {
+    const minutos = Number(duracion)
+    if (!Number.isInteger(minutos) || minutos < 15 || minutos > 300) {
+      return 'La duración tiene que ser un número entero de minutos, entre 15 y 300'
+    }
+  }
+
+  if (profesor_id !== undefined && profesor_id !== null) {
+    const id = Number(profesor_id)
+    if (!Number.isInteger(id) || id < 1) return 'El profesor elegido no es válido'
+  }
+
+  return null
+}
+
 /**
  * Tipos de reserva, con los días que cubren y lo que multiplican al precio
  * del horario. Antes el precio se calculaba con el tipo pero el período lo
