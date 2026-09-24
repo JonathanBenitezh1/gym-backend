@@ -227,20 +227,25 @@ export const obtenerPagosDeSocio = async (req, res) => {
     return res.status(400).json({ error: 'Socio inválido' })
   }
   try {
-    const r = await pool.query(
-      `SELECT p.id, p.monto::float AS monto, p.metodo, p.meses, p.created_at,
-              to_char(p.vence_anterior, 'YYYY-MM-DD') AS vence_anterior,
-              to_char(p.vence_nuevo, 'YYYY-MM-DD') AS vence_nuevo,
-              u.nombre AS registrado_por
-       FROM pagos_cuota p LEFT JOIN usuarios u ON u.id = p.registrado_por
-       WHERE p.usuario_id = $1 ORDER BY p.created_at DESC LIMIT 24`,
-      [usuario_id]
-    )
-    res.json(r.rows)
+    res.json(await leerPagos(usuario_id))
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al obtener los pagos' })
   }
+}
+
+// Los últimos 24 pagos de cuota de un socio, el más nuevo primero.
+async function leerPagos(usuario_id) {
+  const r = await pool.query(
+    `SELECT p.id, p.monto::float AS monto, p.metodo, p.meses, p.created_at,
+            to_char(p.vence_anterior, 'YYYY-MM-DD') AS vence_anterior,
+            to_char(p.vence_nuevo, 'YYYY-MM-DD') AS vence_nuevo,
+            u.nombre AS registrado_por
+     FROM pagos_cuota p LEFT JOIN usuarios u ON u.id = p.registrado_por
+     WHERE p.usuario_id = $1 ORDER BY p.created_at DESC LIMIT 24`,
+    [usuario_id]
+  )
+  return r.rows
 }
 
 // ─── Para el socio ────────────────────────────────────
@@ -265,5 +270,17 @@ export const obtenerMiCuota = async (req, res) => {
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al obtener tu cuota' })
+  }
+}
+
+// Antes el socio no veía sus pagos de cuota: el historial de Perfil era
+// solo de reservas. Sin el nombre de quién lo cobró, que es interno.
+export const obtenerMisPagosCuota = async (req, res) => {
+  try {
+    const pagos = await leerPagos(req.usuario.id)
+    res.json(pagos.map(({ registrado_por, ...pago }) => pago))
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al obtener tus pagos de cuota' })
   }
 }
