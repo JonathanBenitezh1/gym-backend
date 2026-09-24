@@ -2,7 +2,6 @@ import express from 'express'
 import cors from 'cors'
 import jwt from 'jsonwebtoken'
 import helmet from 'helmet'
-import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
@@ -21,6 +20,7 @@ import progresoRoutes   from './routes/progresoRoutes.js'
 import cuotaRoutes      from './routes/cuotaRoutes.js'
 import puertaRoutes     from './routes/puertaRoutes.js'
 import { leerUsuario, sesionVigente } from './middlewares/authMiddleware.js'
+import { limiteGeneral, limitePuerta } from './middlewares/limites.js'
 
 dotenv.config()
 
@@ -55,62 +55,12 @@ app.use(helmet({
 app.use(cors(corsOptions))
 app.use(express.json({ limit: '100kb' }))
 
-/**
- * La IP real de quien pide, para los límites de intentos.
- *
- * Delante de Render está Cloudflare, así que `req.ip` era la IP de salida de
- * Cloudflare, compartida por toda la gente que entra por el mismo nodo. En
- * producción se vio a un mismo cliente repartido en dos contadores, y 20
- * logins fallidos de cualquiera bloqueaban el login de todos los demás.
- *
- * Cloudflare manda la IP real en CF-Connecting-IP y pisa cualquier valor que
- * traiga el pedido. En la PC no hay Cloudflare y se usa `req.ip`.
- * `ipKeyGenerator` agrupa las IPv6 por subred, para que no alcance con rotar
- * direcciones dentro de la misma conexión.
- */
-const claveDeCliente = (req) => ipKeyGenerator(req.get('cf-connecting-ip') || req.ip)
-
-// Límite general: evita que un cliente sature la API a pedidos.
-//
-// La puerta queda afuera y tiene el suyo: la PC de recepción y los celulares
-// de los socios salen a internet por la misma IP del wifi del gimnasio, y en
-// la hora pico compartir este contador podía dejar la puerta sin servicio.
-// Sus rutas piden sesión de recepción o admin, así que no quedan abiertas.
-app.use('/api', rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 600,
-  skip: (req) => req.path.startsWith('/puerta/'),
-  keyGenerator: claveDeCliente,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Demasiadas peticiones. Esperá unos minutos e intentá de nuevo.' }
-}))
-
-// Límite estricto en login y registro: es la defensa contra fuerza bruta.
-const limiteAuth = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  keyGenerator: claveDeCliente,
-  standardHeaders: true,
-  legacyHeaders: false,
-  skipSuccessfulRequests: true,
-  message: { error: 'Demasiados intentos. Esperá 15 minutos e intentá de nuevo.' }
-})
-
-// Una pasada son 2 pedidos (ingreso y foto): esto alcanza para ~1500 por
-// cuarto de hora, muy por encima de cualquier hora pico.
-const limitePuerta = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 3000,
-  keyGenerator: claveDeCliente,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Demasiadas peticiones desde la puerta. Esperá unos minutos.' }
-})
+// Límites de pedidos: ver middlewares/limites.js.
+app.use('/api', limiteGeneral)
 
 app.set('io', io)
 
-app.use('/api/auth',       limiteAuth, authRoutes)
+app.use('/api/auth',       authRoutes)
 app.use('/api/admin',      adminRoutes)
 app.use('/api',            clasesRoutes)
 app.use('/api/reservas',   reservasRoutes)
