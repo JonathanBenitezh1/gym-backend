@@ -44,7 +44,7 @@ export function leerUsuario(id) {
   const versionAlEmpezar = version.get(clave) || 0
 
   const lectura = pool
-    .query('SELECT id, rol, activo, debe_cambiar_password FROM usuarios WHERE id = $1', [clave])
+    .query('SELECT id, rol, activo, debe_cambiar_password, sesion_version FROM usuarios WHERE id = $1', [clave])
     .then(({ rows }) => {
       const datos = rows[0] || null
       if ((version.get(clave) || 0) === versionAlEmpezar) {
@@ -58,6 +58,18 @@ export function leerUsuario(id) {
 
   enCurso.set(clave, lectura)
   return lectura
+}
+
+/**
+ * El token es de una sesión que sigue abierta.
+ *
+ * Cambiar o restablecer la contraseña sube `sesion_version`, y los tokens
+ * firmados antes quedan viejos: así se cierra la sesión que haya quedado
+ * abierta en otro teléfono. Los tokens de antes de la migración 010 no traen
+ * número y valen como 0.
+ */
+export function sesionVigente(datosToken, usuario) {
+  return (datosToken.ver ?? 0) === (usuario.sesion_version ?? 0)
 }
 
 // Verifica el token y contrasta al usuario contra la base.
@@ -89,6 +101,10 @@ export const verificarToken = async (req, res, next) => {
 
     if (!usuario.activo) {
       return res.status(401).json({ error: 'Tu usuario está dado de baja. Consultá en el gimnasio.' })
+    }
+
+    if (!sesionVigente(datos, usuario)) {
+      return res.status(401).json({ error: 'La contraseña cambió. Iniciá sesión de nuevo.' })
     }
 
     // El rol y la marca de contraseña temporal salen de la base, no del token.

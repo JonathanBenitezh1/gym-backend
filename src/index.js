@@ -20,7 +20,7 @@ import esperaRoutes     from './routes/esperaRoutes.js'
 import progresoRoutes   from './routes/progresoRoutes.js'
 import cuotaRoutes      from './routes/cuotaRoutes.js'
 import puertaRoutes     from './routes/puertaRoutes.js'
-import { leerUsuario } from './middlewares/authMiddleware.js'
+import { leerUsuario, sesionVigente } from './middlewares/authMiddleware.js'
 
 dotenv.config()
 
@@ -174,6 +174,7 @@ io.use(async (socket, next) => {
     // rigen también para el tiempo real.
     const usuario = await leerUsuario(datos.id)
     if (!usuario || !usuario.activo) return next(new Error('Usuario sin acceso'))
+    if (!sesionVigente(datos, usuario)) return next(new Error('Token invalido o expirado'))
 
     socket.data.usuario = { id: usuario.id, rol: usuario.rol }
     next()

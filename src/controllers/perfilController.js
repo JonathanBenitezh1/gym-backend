@@ -114,20 +114,26 @@ export const cambiarPassword = async (req, res) => {
 
     const hashed = await bcrypt.hash(password_nueva, 10)
     // Al elegir una contraseña propia deja de estar pendiente el cambio
-    // obligatorio que impone el restablecimiento desde el panel.
-    await pool.query(
-      'UPDATE usuarios SET password=$1, debe_cambiar_password=false WHERE id=$2',
+    // obligatorio que impone el restablecimiento desde el panel. Subir la
+    // versión cierra las sesiones abiertas en otros dispositivos.
+    const actualizado = await pool.query(
+      `UPDATE usuarios SET password=$1, debe_cambiar_password=false, sesion_version = sesion_version + 1
+       WHERE id=$2 RETURNING sesion_version`,
       [hashed, id]
     )
 
     // Sin esto la marca de contraseña temporal seguiría unos segundos en memoria.
     olvidarUsuario(id)
 
-    // El token viejo sigue diciendo que el cambio esta pendiente, asi que
-    // devolvemos uno nuevo: sin esto la app quedaria trabada en la pantalla
-    // de cambio obligatorio para siempre.
+    // El tiempo real también se corta: la app que hizo el cambio se vuelve a
+    // conectar con el token nuevo, las otras sesiones quedan afuera.
+    req.app.get('io').in(`usuario:${id}`).disconnectSockets(true)
+
+    // El token viejo quedó sin validez, asi que devolvemos uno nuevo: sin
+    // esto la app quedaria trabada en la pantalla de cambio obligatorio, o
+    // afuera de la sesión.
     const token = jwt.sign(
-      { id, rol: req.usuario.rol, debe_cambiar_password: false },
+      { id, rol: req.usuario.rol, debe_cambiar_password: false, ver: actualizado.rows[0].sesion_version },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     )

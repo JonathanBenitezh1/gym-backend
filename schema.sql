@@ -625,6 +625,7 @@ CREATE TABLE public.usuarios (
     activo boolean DEFAULT true NOT NULL,
     apto_vence date,
     cuota_vence date,
+    sesion_version integer DEFAULT 0 NOT NULL,
     CONSTRAINT usuarios_rol_check CHECK (((rol)::text = ANY ((ARRAY['alumno'::character varying, 'profesor'::character varying, 'profesional'::character varying, 'admin'::character varying, 'recepcion'::character varying])::text[])))
 );
 

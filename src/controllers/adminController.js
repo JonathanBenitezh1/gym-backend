@@ -387,13 +387,17 @@ export const restablecerPassword = async (req, res) => {
     const temporal = generarPasswordTemporal()
     const hash = await bcrypt.hash(temporal, 10)
 
+    // Subir la versión cierra las sesiones que tenía abiertas: sin esto, apenas
+    // el socio elegía su clave nueva, un token viejo volvía a funcionar.
     await pool.query(
-      'UPDATE usuarios SET password = $1, debe_cambiar_password = true WHERE id = $2',
+      `UPDATE usuarios SET password = $1, debe_cambiar_password = true, sesion_version = sesion_version + 1
+       WHERE id = $2`,
       [hash, id]
     )
 
     // La marca de contraseña temporal tiene que regir desde el próximo pedido.
     olvidarUsuario(id)
+    req.app.get('io').in(`usuario:${id}`).disconnectSockets(true)
 
     anotarActividad({
       usuario_id: req.usuario.id, accion: 'usuario.restablecer_password',

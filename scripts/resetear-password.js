@@ -61,9 +61,10 @@ try {
   const hash = await bcrypt.hash(password, 10)
 
   // Ponemos debe_cambiar_password en false: es una clave que la persona
-  // eligió a propósito, no una temporal que deba cambiar al entrar.
+  // eligió a propósito, no una temporal que deba cambiar al entrar. Subir la
+  // versión cierra las sesiones abiertas con la clave anterior.
   await pool.query(
-    'UPDATE usuarios SET password = $1, debe_cambiar_password = false WHERE email = $2',
+    'UPDATE usuarios SET password = $1, debe_cambiar_password = false, sesion_version = sesion_version + 1 WHERE email = $2',
     [hash, email]
   )
 

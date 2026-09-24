@@ -42,16 +42,16 @@ export const registro = async (req, res) => {
     const resultado = await pool.query(
       `INSERT INTO usuarios (nombre, email, password, dni, telefono)
        VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, nombre, email, dni, telefono, rol`,
+       RETURNING id, nombre, email, dni, telefono, rol, sesion_version`,
       [nombre, email, hashedPassword, dni, telefono]
     )
 
-    const usuario = resultado.rows[0]
+    const { sesion_version, ...usuario } = resultado.rows[0]
 
     // Quien se registra elige su propia clave, asi que nunca arranca con el
     // cambio obligatorio pendiente.
     const token = jwt.sign(
-      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: false },
+      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: false, ver: sesion_version },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     )
@@ -99,7 +99,7 @@ export const login = async (req, res) => {
     const debeCambiar = usuario.debe_cambiar_password === true
 
     const token = jwt.sign(
-      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: debeCambiar },
+      { id: usuario.id, rol: usuario.rol, debe_cambiar_password: debeCambiar, ver: usuario.sesion_version },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     )
