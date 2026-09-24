@@ -71,9 +71,15 @@ app.use(express.json({ limit: '100kb' }))
 const claveDeCliente = (req) => ipKeyGenerator(req.get('cf-connecting-ip') || req.ip)
 
 // Límite general: evita que un cliente sature la API a pedidos.
+//
+// La puerta queda afuera y tiene el suyo: la PC de recepción y los celulares
+// de los socios salen a internet por la misma IP del wifi del gimnasio, y en
+// la hora pico compartir este contador podía dejar la puerta sin servicio.
+// Sus rutas piden sesión de recepción o admin, así que no quedan abiertas.
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 600,
+  skip: (req) => req.path.startsWith('/puerta/'),
   keyGenerator: claveDeCliente,
   standardHeaders: true,
   legacyHeaders: false,
@@ -91,6 +97,17 @@ const limiteAuth = rateLimit({
   message: { error: 'Demasiados intentos. Esperá 15 minutos e intentá de nuevo.' }
 })
 
+// Una pasada son 2 pedidos (ingreso y foto): esto alcanza para ~1500 por
+// cuarto de hora, muy por encima de cualquier hora pico.
+const limitePuerta = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3000,
+  keyGenerator: claveDeCliente,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas peticiones desde la puerta. Esperá unos minutos.' }
+})
+
 app.set('io', io)
 
 app.use('/api/auth',       limiteAuth, authRoutes)
@@ -105,7 +122,7 @@ app.use('/api/presencia',  presenciaRoutes)
 app.use('/api/espera',     esperaRoutes)
 app.use('/api/progreso',   progresoRoutes)
 app.use('/api/cuota',      cuotaRoutes)
-app.use('/api/puerta',     puertaRoutes)
+app.use('/api/puerta',     limitePuerta, puertaRoutes)
 
 app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })

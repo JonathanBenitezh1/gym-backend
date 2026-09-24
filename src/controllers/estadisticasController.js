@@ -15,7 +15,7 @@ const HOY_AR = `(now() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date`
  */
 export const obtenerEstadisticas = async (req, res) => {
   try {
-    const [ingresos, socios, ocupacion, asistencia, pendientes] = await Promise.all([
+    const [ingresos, socios, ocupacion, asistencia, pendientes, puerta, porHora] = await Promise.all([
       // Cobrado por mes, ultimos 6 meses incluido el actual. generate_series
       // deja en cero los meses sin pagos en lugar de saltearlos.
       pool.query(
@@ -72,6 +72,27 @@ export const obtenerEstadisticas = async (req, res) => {
       pool.query(
         `SELECT COALESCE(SUM(total), 0)::float AS monto, COUNT(*)::int AS cantidad
          FROM reservas WHERE estado = 'pendiente'`
+      ),
+      // Pasadas por la puerta hoy. ingresos.created_at es TIMESTAMPTZ.
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE resultado IN ('al_dia', 'gracia', 'personal'))::int AS entraron,
+                COUNT(*) FILTER (WHERE resultado NOT IN ('al_dia', 'gracia', 'personal'))::int AS rechazados
+         FROM ingresos
+         WHERE (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date = ${HOY_AR}`
+      ),
+      // Promedio de ingresos por hora en los últimos 30 días: muestra las
+      // horas pico. Se divide por los días que tuvieron algún ingreso, así un
+      // gimnasio que abrió hace una semana no ve promedios achicados.
+      pool.query(
+        `WITH entradas AS (
+           SELECT (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires') AS fecha
+           FROM ingresos
+           WHERE resultado IN ('al_dia', 'gracia', 'personal')
+             AND created_at >= now() - interval '30 days'
+         ), dias AS (SELECT GREATEST(COUNT(DISTINCT fecha::date), 1) AS n FROM entradas)
+         SELECT EXTRACT(HOUR FROM fecha)::int AS hora,
+                ROUND(COUNT(*)::numeric / (SELECT n FROM dias), 1)::float AS promedio
+         FROM entradas GROUP BY 1 ORDER BY 1`
       )
     ])
 
@@ -80,7 +101,8 @@ export const obtenerEstadisticas = async (req, res) => {
       socios: socios.rows[0],
       ocupacion: ocupacion.rows,
       asistencia: asistencia.rows,
-      pendientes: pendientes.rows[0]
+      pendientes: pendientes.rows[0],
+      puerta: { ...puerta.rows[0], por_hora: porHora.rows }
     })
   } catch (error) {
     console.error(error)

@@ -167,3 +167,75 @@ export const borrarFoto = async (req, res) => {
     res.status(500).json({ error: 'No se pudo borrar la foto' })
   }
 }
+
+// ─── Sin conexión ─────────────────────────────────────
+
+/**
+ * Lista de socios para que la pantalla de la puerta pueda decidir sola si se
+ * corta internet. Solo lo necesario para la puerta: sin email ni teléfono.
+ * `foto_version` cambia cuando se reemplaza la foto, para no mostrar una vieja
+ * guardada en la PC.
+ */
+export const obtenerPadron = async (req, res) => {
+  try {
+    const [config, socios] = await Promise.all([
+      leerConfig(),
+      pool.query(
+        `SELECT u.id AS usuario_id, u.dni, u.nombre, u.rol, u.activo,
+                to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence,
+                (EXTRACT(EPOCH FROM f.updated_at) * 1000)::bigint AS foto_version
+         FROM usuarios u LEFT JOIN fotos_socio f ON f.usuario_id = u.id
+         WHERE u.dni IS NOT NULL`
+      )
+    ])
+    res.set('Cache-Control', 'no-store')
+    res.json({ dias_gracia: config.dias_gracia, generado: new Date().toISOString(), socios: socios.rows })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'Error al obtener la lista de socios' })
+  }
+}
+
+const RESULTADOS = ['al_dia', 'gracia', 'vencida', 'sin_cuota', 'personal', 'baja', 'no_registrado']
+const MAX_LOTE = 500
+const UNA_SEMANA = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Ingresos que la pantalla anotó sin conexión. Se guarda el resultado que se
+ * mostró en ese momento (es lo que pasó en la puerta) y la hora real de la
+ * pasada. Los repetidos se ignoran por id_local.
+ */
+export const recibirLote = async (req, res) => {
+  const lote = req.body.ingresos
+  if (!Array.isArray(lote) || lote.length === 0 || lote.length > MAX_LOTE) {
+    return res.status(400).json({ error: `Mandá entre 1 y ${MAX_LOTE} ingresos` })
+  }
+  const ahora = Date.now()
+  const validos = lote.filter(i =>
+    RE_DNI.test(String(i?.dni)) &&
+    RESULTADOS.includes(i?.resultado) &&
+    /^[A-Za-z0-9-]{8,40}$/.test(String(i?.id_local)) &&
+    Number.isFinite(Date.parse(i?.fecha)) &&
+    Date.parse(i.fecha) <= ahora + 60_000 &&
+    Date.parse(i.fecha) >= ahora - UNA_SEMANA
+  )
+
+  try {
+    let guardados = 0
+    for (const i of validos) {
+      const r = await pool.query(
+        `INSERT INTO ingresos (usuario_id, dni, resultado, registrado_por, created_at, id_local)
+         VALUES ((SELECT id FROM usuarios WHERE dni = $1), $1, $2, $3, $4, $5)
+         ON CONFLICT (id_local) WHERE id_local IS NOT NULL DO NOTHING`,
+        [i.dni, i.resultado, req.usuario.id, i.fecha, i.id_local]
+      )
+      guardados += r.rowCount
+    }
+    if (guardados > 0) req.app.get('io').to('admins').emit('nuevo_ingreso', { lote: guardados })
+    // Los inválidos se descartan: reintentarlos no los arreglaría.
+    res.status(201).json({ recibidos: lote.length, guardados, descartados: lote.length - validos.length })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ error: 'No se pudieron guardar los ingresos' })
+  }
+}

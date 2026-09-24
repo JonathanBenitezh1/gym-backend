@@ -13,6 +13,9 @@
 --                       guarda también lo rechazado (DNI no registrado,
 --                       cuota vencida) para poder revisarlo.
 --
+-- Si se corta internet, la pantalla decide con la última lista de socios que
+-- bajó y manda los ingresos después (ingresos.id_local).
+--
 -- La foto no se usa para reconocimiento automático: la compara una persona.
 --
 -- No borra datos. Se puede correr más de una vez.
@@ -42,6 +45,11 @@ CREATE TABLE IF NOT EXISTS ingresos (
   registrado_por  INTEGER REFERENCES usuarios(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Ingresos anotados sin conexión: la pantalla les pone un id propio y los
+-- manda cuando vuelve internet. Si el envío se repite, el id evita duplicarlos.
+ALTER TABLE ingresos ADD COLUMN IF NOT EXISTS id_local VARCHAR(40);
+CREATE UNIQUE INDEX IF NOT EXISTS ingresos_id_local_idx ON ingresos (id_local) WHERE id_local IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ingresos_fecha_idx   ON ingresos (created_at);
 CREATE INDEX IF NOT EXISTS ingresos_usuario_idx ON ingresos (usuario_id, created_at DESC);
