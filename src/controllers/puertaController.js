@@ -80,7 +80,8 @@ export const registrarIngreso = async (req, res) => {
 }
 
 export const obtenerUltimosIngresos = async (req, res) => {
-  const limite = Math.min(Number(req.query.limite) || 10, 200)
+  // Un límite negativo o con decimales llegaba tal cual al LIMIT y daba 500.
+  const limite = Math.min(Math.max(Number.parseInt(req.query.limite, 10) || 10, 1), 200)
   try {
     const r = await pool.query(
       `SELECT i.id, i.dni, i.resultado, i.created_at, u.nombre

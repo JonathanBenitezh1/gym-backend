@@ -1,4 +1,5 @@
 import pool from '../db/conexion.js'
+import { ORDEN_DIA } from '../utils/validaciones.js'
 
 // Obtener todos los horarios disponibles agrupados por rama
 export const obtenerHorariosDisponibles = async (req, res) => {
@@ -22,7 +23,7 @@ export const obtenerHorariosDisponibles = async (req, res) => {
        JOIN clases c ON h.clase_id = c.id
        LEFT JOIN usuarios u ON c.profesor_id = u.id
        WHERE h.activo = true AND c.activo = true
-       ORDER BY c.rama, h.dia_semana, h.hora_inicio`
+       ORDER BY c.rama, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`
     )
     res.json(resultado.rows)
   } catch (error) {

@@ -3,6 +3,14 @@ import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { estadoCuota, calcularNuevoVence, hoyEnArgentina } from '../utils/cuota.js'
 
 const METODOS = ['efectivo', 'transferencia', 'mercadopago', 'otro']
+
+// Number(null) y Number('') dan 0. Un precio o un monto que no llegó (o que
+// la app no pudo leer y mandó como null) se guardaba como $0 sin ningún aviso.
+const aNumero = (valor) =>
+  typeof valor === 'number' || (typeof valor === 'string' && valor.trim() !== '')
+    ? Number(valor)
+    : NaN
+
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
 
 const fechaValida = (texto) => {
@@ -35,7 +43,7 @@ export const guardarConfigCuota = async (req, res) => {
   const { modo_vencimiento, dia_vencimiento, dias_gracia, precio } = req.body
   const dia = Number(dia_vencimiento)
   const gracia = Number(dias_gracia)
-  const monto = Number(precio)
+  const monto = aNumero(precio)
 
   if (!['mensual', 'dia_fijo'].includes(modo_vencimiento)) {
     return res.status(400).json({ error: 'Elegí cómo vence la cuota' })
@@ -108,7 +116,7 @@ export const obtenerCuotas = async (req, res) => {
 export const registrarPagoCuota = async (req, res) => {
   const usuario_id = Number(req.params.usuario_id)
   const meses = Number(req.body.meses ?? 1)
-  const monto = Number(req.body.monto)
+  const monto = aNumero(req.body.monto)
   const { metodo } = req.body
 
   if (!Number.isInteger(usuario_id) || usuario_id <= 0) {

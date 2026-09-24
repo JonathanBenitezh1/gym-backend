@@ -1,7 +1,7 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
-import { validarHorario } from '../utils/validaciones.js'
+import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
@@ -219,7 +219,7 @@ export const obtenerHorariosAdmin = async (req, res) => {
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        LEFT JOIN usuarios u ON c.profesor_id = u.id
-       ORDER BY c.nombre, h.dia_semana, h.hora_inicio`
+       ORDER BY c.nombre, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`
     )
     res.json(resultado.rows)
   } catch (error) {

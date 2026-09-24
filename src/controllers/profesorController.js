@@ -1,6 +1,7 @@
 import pool from '../db/conexion.js'
-import { validarHorario } from '../utils/validaciones.js'
+import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
 import { avisarCupoLibre } from './esperaController.js'
+import { anotarActividad } from '../utils/auditoria.js'
 
 // ─── MIS CLASES Y HORARIOS ────────────────────────────
 
@@ -30,7 +31,7 @@ export const obtenerMisHorarios = async (req, res) => {
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        WHERE c.profesor_id = $1
-       ORDER BY h.dia_semana, h.hora_inicio`,
+       ORDER BY ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
       [profesor_id]
     )
     res.json(resultado.rows)
@@ -69,6 +70,12 @@ export const modificarHorario = async (req, res) => {
        WHERE id=$7 RETURNING *`,
       [dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, activo, id]
     )
+    // Igual que cuando edita el admin: sin esto, los cambios de horario y de
+    // cupos que hacía el profe no quedaban en Actividad.
+    anotarActividad({
+      usuario_id: profesor_id, accion: 'horario.editar', entidad: 'horario',
+      entidad_id: Number(id), detalle: { dia_semana, hora_inicio }
+    })
     avisarCupoLibre(req.app.get('io'), [Number(id)])
     res.json(resultado.rows[0])
   } catch (error) {

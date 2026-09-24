@@ -66,6 +66,15 @@ export const DIAS_SEMANA = [
   'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
 ]
 
+/**
+ * Para ordenar por día en SQL. `dia_semana` es texto, y ordenarlo tal cual
+ * daba Jueves, Lunes, Martes, Miércoles, Sábado, Viernes: la lista de
+ * horarios del profe y la del panel salían salteadas. Los días son fijos,
+ * no vienen del pedido.
+ */
+export const ORDEN_DIA = (columna) =>
+  `array_position(ARRAY[${DIAS_SEMANA.map(d => `'${d}'`).join(', ')}]::text[], ${columna}::text)`
+
 const RE_HORA = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 
 /**
