@@ -25,14 +25,19 @@ export const obtenerEstadisticas = async (req, res) => {
              date_trunc('month', ${HOY_AR}),
              interval '1 month'
            )::date AS mes
+         ),
+         -- Reservas pagadas y cuotas, en hora argentina. pagos_cuota ya es
+         -- TIMESTAMPTZ, así que se convierte directo.
+         cobros AS (
+           SELECT monto, ${EN_ARGENTINA('created_at')} AS fecha FROM pagos WHERE estado = 'pagado'
+           UNION ALL
+           SELECT monto, created_at AT TIME ZONE 'America/Argentina/Buenos_Aires' FROM pagos_cuota
          )
          SELECT to_char(m.mes, 'YYYY-MM') AS mes,
-                COALESCE(SUM(p.monto), 0)::float AS total,
-                COUNT(p.id)::int AS pagos
+                COALESCE(SUM(c.monto), 0)::float AS total,
+                COUNT(c.monto)::int AS pagos
          FROM meses m
-         LEFT JOIN pagos p
-           ON p.estado = 'pagado'
-          AND date_trunc('month', ${EN_ARGENTINA('p.created_at')})::date = m.mes
+         LEFT JOIN cobros c ON date_trunc('month', c.fecha)::date = m.mes
          GROUP BY m.mes ORDER BY m.mes`
       ),
       pool.query(

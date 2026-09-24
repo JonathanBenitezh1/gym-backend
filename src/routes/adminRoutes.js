@@ -9,6 +9,10 @@ import {
 } from '../controllers/adminController.js'
 import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.js'
 import { obtenerEstadisticas } from '../controllers/estadisticasController.js'
+import {
+  obtenerConfigCuota, guardarConfigCuota, obtenerCuotas,
+  registrarPagoCuota, corregirVence, obtenerPagosDeSocio
+} from '../controllers/cuotaController.js'
 
 const router = Router()
 
@@ -42,6 +46,14 @@ router.get('/clases/:id/verificar', verificarClaseAntesDeshabilitar)
 
 // Registro de actividad
 router.get('/actividad', obtenerActividad)
+
+// Cuotas
+router.get('/cuotas', obtenerCuotas)
+router.get('/cuotas/config', obtenerConfigCuota)
+router.put('/cuotas/config', guardarConfigCuota)
+router.post('/cuotas/:usuario_id/pago', registrarPagoCuota)
+router.put('/cuotas/:usuario_id/vence', corregirVence)
+router.get('/cuotas/:usuario_id/pagos', obtenerPagosDeSocio)
 
 // Estadisticas del panel
 router.get('/estadisticas', obtenerEstadisticas)
