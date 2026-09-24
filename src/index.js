@@ -19,6 +19,7 @@ import presenciaRoutes from './routes/presenciaRoutes.js'
 import esperaRoutes     from './routes/esperaRoutes.js'
 import progresoRoutes   from './routes/progresoRoutes.js'
 import cuotaRoutes      from './routes/cuotaRoutes.js'
+import puertaRoutes     from './routes/puertaRoutes.js'
 import { leerUsuario } from './middlewares/authMiddleware.js'
 
 dotenv.config()
@@ -104,6 +105,7 @@ app.use('/api/presencia',  presenciaRoutes)
 app.use('/api/espera',     esperaRoutes)
 app.use('/api/progreso',   progresoRoutes)
 app.use('/api/cuota',      cuotaRoutes)
+app.use('/api/puerta',     puertaRoutes)
 
 app.get('/api/ping', (req, res) => {
   res.json({ mensaje: 'El servidor está funcionando ✅' })

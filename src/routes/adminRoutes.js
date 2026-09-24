@@ -9,6 +9,7 @@ import {
 } from '../controllers/adminController.js'
 import { verificarClaseAntesDeshabilitar } from '../controllers/adminController.js'
 import { obtenerEstadisticas } from '../controllers/estadisticasController.js'
+import { guardarFoto, borrarFoto } from '../controllers/puertaController.js'
 import {
   obtenerConfigCuota, guardarConfigCuota, obtenerCuotas,
   registrarPagoCuota, corregirVence, obtenerPagosDeSocio
@@ -38,6 +39,8 @@ router.put('/usuarios/:id/rol', cambiarRol)
 router.put('/usuarios/:id/restablecer-password', restablecerPassword)
 router.put('/usuarios/:id/estado', cambiarEstadoUsuario)
 router.put('/usuarios/:id/apto', cambiarApto)
+router.put('/usuarios/:id/foto', guardarFoto)
+router.delete('/usuarios/:id/foto', borrarFoto)
 
 // Reservas y pagos
 router.get('/reservas', obtenerReservas)

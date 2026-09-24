@@ -139,3 +139,10 @@ export const soloProfesor = (req, res, next) => {
   }
   next()
 }
+// El empleado de la puerta. El admin también puede usar la pantalla de ingreso.
+export const soloRecepcion = (req, res, next) => {
+  if (!['recepcion', 'admin'].includes(req.usuario.rol)) {
+    return res.status(403).json({ error: 'Acceso solo para recepción' })
+  }
+  next()
+}

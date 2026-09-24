@@ -296,7 +296,8 @@ export const obtenerUsuarios = async (req, res) => {
       // La fecha va como texto: pg la convierte a Date en hora del servidor
       // y el JSON la corre un día.
       `SELECT id, nombre, email, dni, telefono, rol, activo, created_at,
-              to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence
+              to_char(apto_vence, 'YYYY-MM-DD') AS apto_vence,
+              EXISTS (SELECT 1 FROM fotos_socio f WHERE f.usuario_id = usuarios.id) AS tiene_foto
        FROM usuarios ORDER BY created_at DESC`
     )
     res.json(resultado.rows)
@@ -414,7 +415,7 @@ export const cambiarRol = async (req, res) => {
   const { id } = req.params
   const { rol } = req.body
 
-  const rolesValidos = ['alumno', 'profesor', 'profesional', 'admin']
+  const rolesValidos = ['alumno', 'profesor', 'profesional', 'admin', 'recepcion']
   if (!rolesValidos.includes(rol)) {
     return res.status(400).json({ error: 'Rol no válido' })
   }
