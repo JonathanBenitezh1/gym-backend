@@ -85,7 +85,7 @@ const RE_HORA = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
  * Sin esto un error de tipeo en el panel dejaba horarios imposibles: la hora
  * de fin antes de la de inicio, cupos negativos o un precio en cero.
  */
-export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio }) {
+export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, precio }) {
   if (dia_semana !== undefined && !DIAS_SEMANA.includes(String(dia_semana))) {
     return 'El día tiene que ser uno de la semana, escrito como en el panel'
   }
@@ -103,21 +103,11 @@ export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totale
     return 'La hora de fin tiene que ser posterior a la de inicio'
   }
 
-  let totales
+  // Los disponibles ya no se cargan a mano: se cuentan con las reservas.
   if (cupos_totales !== undefined) {
-    totales = Number(cupos_totales)
+    const totales = Number(cupos_totales)
     if (!Number.isInteger(totales) || totales < 1 || totales > 500) {
       return 'Los cupos totales tienen que ser un número entero entre 1 y 500'
-    }
-  }
-
-  if (cupos_disponibles !== undefined) {
-    const disponibles = Number(cupos_disponibles)
-    if (!Number.isInteger(disponibles) || disponibles < 0) {
-      return 'Los cupos disponibles no pueden ser negativos'
-    }
-    if (totales !== undefined && disponibles > totales) {
-      return 'No puede haber más cupos disponibles que cupos totales'
     }
   }
 

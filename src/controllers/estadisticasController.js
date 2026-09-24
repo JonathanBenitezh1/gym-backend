@@ -1,4 +1,5 @@
 import pool from '../db/conexion.js'
+import { LIBRES, semanaActual } from '../utils/cupos.js'
 
 // pagos.created_at es TIMESTAMP sin zona, grabado con now() en la zona de la
 // sesion: UTC en Neon, la de la PC en local. Se pasa primero a instante real
@@ -14,6 +15,7 @@ const HOY_AR = `(now() AT TIME ZONE 'America/Argentina/Buenos_Aires')::date`
  * chicas en paralelo, todas agregadas en la base.
  */
 export const obtenerEstadisticas = async (req, res) => {
+  const semana = semanaActual()
   try {
     const [ingresos, socios, ocupacion, asistencia, pendientes, puerta, porHora] = await Promise.all([
       // Cobrado por mes, ultimos 6 meses incluido el actual. generate_series
@@ -48,14 +50,18 @@ export const obtenerEstadisticas = async (req, res) => {
            COUNT(*) FILTER (WHERE activo AND (apto_vence IS NULL OR apto_vence < ${HOY_AR}))::int AS sin_apto
          FROM usuarios WHERE rol = 'alumno'`
       ),
-      // Ocupacion actual de cada horario activo: lugares tomados sobre el total.
+      // Ocupacion de esta semana en cada horario activo: lugares tomados
+      // sobre el total, contados con las reservas.
       pool.query(
-        `SELECT h.id, c.nombre AS clase, h.dia_semana, h.hora_inicio,
-                h.cupos_totales, (h.cupos_totales - h.cupos_disponibles)::int AS ocupados
-         FROM horarios h JOIN clases c ON c.id = h.clase_id
-         WHERE h.activo AND c.activo
-         ORDER BY (h.cupos_totales - h.cupos_disponibles)::float / h.cupos_totales DESC, c.nombre
-         LIMIT 12`
+        `SELECT id, clase, dia_semana, hora_inicio, cupos_totales, ocupados FROM (
+           SELECT h.id, c.nombre AS clase, h.dia_semana, h.hora_inicio, h.cupos_totales,
+                  (h.cupos_totales - ${LIBRES('h', '$1', '$2')})::int AS ocupados
+           FROM horarios h JOIN clases c ON c.id = h.clase_id
+           WHERE h.activo AND c.activo
+         ) o
+         ORDER BY ocupados::float / cupos_totales DESC, clase
+         LIMIT 12`,
+        [semana.desde, semana.hasta]
       ),
       // Asistencia de los ultimos 30 dias por clase, sobre lo que el profe marco.
       pool.query(

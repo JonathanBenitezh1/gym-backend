@@ -234,6 +234,13 @@ CREATE TABLE public.horarios (
 
 
 --
+-- Name: COLUMN horarios.cupos_disponibles; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.horarios.cupos_disponibles IS 'Sin uso desde la migración 011: los lugares libres se cuentan por semana con las reservas.';
+
+
+--
 -- Name: horarios_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -1029,6 +1036,13 @@ CREATE UNIQUE INDEX plantillas_rutina_nombre_idx ON public.plantillas_rutina USI
 --
 
 CREATE INDEX progreso_usuario_idx ON public.progreso USING btree (usuario_id, medida, fecha);
+
+
+--
+-- Name: reservas_horario_periodo_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reservas_horario_periodo_idx ON public.reservas USING btree (horario_id, fecha_inicio, fecha_fin) WHERE ((estado)::text <> 'cancelado'::text);
 
 
 --

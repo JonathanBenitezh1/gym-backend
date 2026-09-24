@@ -2,6 +2,7 @@ import pool from '../db/conexion.js'
 import { validarPedidoDeReserva } from '../utils/validaciones.js'
 import { registrarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
+import { LIBRES, SE_SUPERPONE, periodoPedido } from '../utils/cupos.js'
 
 /**
  * Error con un mensaje pensado para mostrarle a la persona.
@@ -58,17 +59,14 @@ export const crearReserva = async (req, res) => {
 
       const h = horario.rows[0]
 
-      // No reservar dos veces la misma clase en el mismo período.
+      // No reservar dos veces la misma clase en el mismo período. El fin no
+      // cuenta: antes se comparaba con >= y la semanal que terminaba el lunes
+      // impedía reservar la semana siguiente, que empieza ese mismo lunes.
       const reservaExistente = await client.query(
         `SELECT r.id FROM reservas r
          WHERE r.usuario_id = $1
          AND r.horario_id = $2
-         AND r.estado NOT IN ('cancelado')
-         AND (
-           (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
-           (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
-           (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
-         )`,
+         AND ${SE_SUPERPONE('r', '$3', '$4')}`,
         [usuario_id, horario_id, fecha_inicio, fecha_fin]
       )
 
@@ -81,17 +79,12 @@ export const crearReserva = async (req, res) => {
         `SELECT r.id FROM reservas r
          JOIN horarios h ON r.horario_id = h.id
          WHERE r.usuario_id = $1
-         AND r.estado NOT IN ('cancelado')
          AND h.dia_semana = (SELECT dia_semana FROM horarios WHERE id = $2)
          AND (
            h.hora_inicio < (SELECT hora_fin FROM horarios WHERE id = $2) AND
            h.hora_fin > (SELECT hora_inicio FROM horarios WHERE id = $2)
          )
-         AND (
-           (r.fecha_inicio <= $3 AND r.fecha_fin >= $3) OR
-           (r.fecha_inicio <= $4 AND r.fecha_fin >= $4) OR
-           (r.fecha_inicio >= $3 AND r.fecha_fin <= $4)
-         )`,
+         AND ${SE_SUPERPONE('r', '$3', '$4')}`,
         [usuario_id, horario_id, fecha_inicio, fecha_fin]
       )
 
@@ -110,7 +103,14 @@ export const crearReserva = async (req, res) => {
         throw errorDeNegocio('Una de las clases seleccionadas ya no está disponible')
       }
 
-      if (h.cupos_disponibles <= 0) {
+      // Los lugares se cuentan con las reservas del período pedido, no con un
+      // contador. La fila del horario está bloqueada: una reserva simultánea
+      // espera y cuenta después, con esta ya guardada.
+      const lugares = await client.query(
+        `SELECT ${LIBRES('h', '$2', '$3')} AS libres FROM horarios h WHERE h.id = $1`,
+        [horario_id, fecha_inicio, fecha_fin]
+      )
+      if (lugares.rows[0].libres <= 0) {
         throw errorDeNegocio('No hay cupos disponibles en uno de los horarios seleccionados')
       }
 
@@ -123,13 +123,6 @@ export const crearReserva = async (req, res) => {
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
         [usuario_id, horario_id, fecha_inicio, fecha_fin, tipo, precio]
-      )
-
-      await client.query(
-        `UPDATE horarios
-         SET cupos_disponibles = cupos_disponibles - 1
-         WHERE id = $1`,
-        [horario_id]
       )
 
       reservasCreadas.push(reserva.rows[0])
@@ -223,15 +216,8 @@ export const cancelarReserva = async (req, res) => {
       throw errorDeNegocio('No podés cancelar una reserva ya pagada')
     }
 
-    // LEAST es el cinturón de seguridad: el cupo devuelto nunca puede dejar
-    // el horario con más lugares de los que tiene.
-    await client.query(
-      `UPDATE horarios
-       SET cupos_disponibles = LEAST(cupos_disponibles + 1, cupos_totales)
-       WHERE id = $1`,
-      [reserva.rows[0].horario_id]
-    )
-
+    // No hay cupo que devolver: los lugares se cuentan con las reservas, y
+    // una cancelada deja de contar.
     await client.query(
       `UPDATE reservas SET estado = 'cancelado' WHERE id = $1`,
       [id]
@@ -261,16 +247,23 @@ export const cancelarReserva = async (req, res) => {
   }
 }
 
+/**
+ * Horarios que el socio ya tiene en el período que está por reservar (?desde
+ * y ?hasta, o el próximo semanal). Antes devolvía todos los que reservó alguna
+ * vez: después de la primera semana, la app los mostraba como "Ya reservada"
+ * para siempre y no se podían volver a reservar.
+ */
 export const obtenerHorariosReservados = async (req, res) => {
   const usuario_id = req.usuario.id
+  const { desde, hasta } = periodoPedido(req.query)
 
   try {
     const resultado = await pool.query(
       `SELECT DISTINCT horario_id
-       FROM reservas
-       WHERE usuario_id = $1
-       AND estado NOT IN ('cancelado')`,
-      [usuario_id]
+       FROM reservas r
+       WHERE r.usuario_id = $1
+       AND ${SE_SUPERPONE('r', '$2', '$3')}`,
+      [usuario_id, desde, hasta]
     )
     res.json(resultado.rows.map(r => r.horario_id))
   } catch (error) {

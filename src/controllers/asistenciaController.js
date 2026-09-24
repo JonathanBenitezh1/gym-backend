@@ -47,7 +47,7 @@ export const obtenerAlumnosDeHorario = async (req, res) => {
          AND a.fecha = $2
        WHERE r.horario_id = $1
        AND r.estado IN ('pendiente', 'pagado')
-       AND $2::date BETWEEN r.fecha_inicio AND r.fecha_fin
+       AND r.fecha_inicio <= $2::date AND r.fecha_fin > $2::date
        ORDER BY u.nombre`,
       [horario_id, fecha]
     )
@@ -70,12 +70,14 @@ export const marcarAsistencia = async (req, res) => {
       return res.status(403).json({ error: 'No tenés permiso para modificar este horario' })
     }
 
-    // El alumno tiene que tener una reserva vigente en ese horario.
+    // El alumno tiene que tener una reserva vigente en ese horario. El fin
+    // no cuenta: con BETWEEN, la semanal de un lunes cubría dos lunes, y el
+    // socio que renovaba aparecía dos veces en la lista.
     const tieneReserva = await pool.query(
       `SELECT 1 FROM reservas
        WHERE horario_id = $1 AND usuario_id = $2
        AND estado IN ('pendiente', 'pagado')
-       AND $3::date BETWEEN fecha_inicio AND fecha_fin`,
+       AND fecha_inicio <= $3::date AND fecha_fin > $3::date`,
       [horario_id, usuario_id, fecha]
     )
     if (tieneReserva.rows.length === 0) {

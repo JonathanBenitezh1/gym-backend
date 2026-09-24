@@ -2,6 +2,7 @@ import pool from '../db/conexion.js'
 import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { anotarActividad } from '../utils/auditoria.js'
+import { LIBRES, proximoPeriodo } from '../utils/cupos.js'
 
 // ─── MIS CLASES Y HORARIOS ────────────────────────────
 
@@ -23,16 +24,19 @@ export const obtenerMisClases = async (req, res) => {
   }
 }
 
+// cupos_disponibles son los lugares libres de la semana que viene.
 export const obtenerMisHorarios = async (req, res) => {
   const profesor_id = req.usuario.id
+  const { desde, hasta } = proximoPeriodo()
   try {
     const resultado = await pool.query(
-      `SELECT h.*, c.nombre AS clase, c.rama
+      `SELECT h.*, ${LIBRES('h', '$2', '$3')} AS cupos_disponibles,
+              c.nombre AS clase, c.rama
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        WHERE c.profesor_id = $1
        ORDER BY ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
-      [profesor_id]
+      [profesor_id, desde, hasta]
     )
     res.json(resultado.rows)
   } catch (error) {
@@ -44,10 +48,12 @@ export const obtenerMisHorarios = async (req, res) => {
 export const modificarHorario = async (req, res) => {
   const { id } = req.params
   const profesor_id = req.usuario.id
-  const { dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, activo } = req.body
+  // cupos_disponibles no se toma del pedido: se cuenta con las reservas
+  // (ver editarHorario del admin).
+  const { dia_semana, hora_inicio, hora_fin, cupos_totales, activo } = req.body
 
   const errorHorario = validarHorario({
-    dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles
+    dia_semana, hora_inicio, hora_fin, cupos_totales
   })
   if (errorHorario) {
     return res.status(400).json({ error: errorHorario })
@@ -66,9 +72,9 @@ export const modificarHorario = async (req, res) => {
     const resultado = await pool.query(
       `UPDATE horarios 
        SET dia_semana=$1, hora_inicio=$2, hora_fin=$3,
-           cupos_totales=$4, cupos_disponibles=$5, activo=$6
-       WHERE id=$7 RETURNING *`,
-      [dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, activo, id]
+           cupos_totales=$4, cupos_disponibles=LEAST(cupos_disponibles, $4), activo=$5
+       WHERE id=$6 RETURNING *`,
+      [dia_semana, hora_inicio, hora_fin, cupos_totales, activo, id]
     )
     // Igual que cuando edita el admin: sin esto, los cambios de horario y de
     // cupos que hacía el profe no quedaban en Actividad.

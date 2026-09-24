@@ -5,6 +5,7 @@ import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
+import { LIBRES, proximoPeriodo } from '../utils/cupos.js'
 
 // ─── CLASES ───────────────────────────────────────────
 
@@ -81,9 +82,10 @@ export const editarClase = async (req, res) => {
     let canceladas = 0
 
     if (seDesactivo) {
-      // Obtenemos las reservas pendientes de esta clase
+      // Obtenemos las reservas pendientes de esta clase. No hay cupo que
+      // devolver: los lugares se cuentan con las reservas.
       const reservasPendientes = await client.query(
-        `SELECT r.id, r.horario_id, r.usuario_id FROM reservas r
+        `SELECT r.id, r.usuario_id FROM reservas r
          JOIN horarios h ON r.horario_id = h.id
          WHERE h.clase_id = $1 AND r.estado = 'pendiente'`,
         [id]
@@ -93,12 +95,6 @@ export const editarClase = async (req, res) => {
         usuariosAfectados.add(reserva.usuario_id)
         canceladas++
 
-        // Devolvemos el cupo, sin pasarnos del total del horario.
-        await client.query(
-          `UPDATE horarios SET cupos_disponibles = LEAST(cupos_disponibles + 1, cupos_totales)
-           WHERE id = $1`,
-          [reserva.horario_id]
-        )
         // Cancelamos la reserva
         await client.query(
           `UPDATE reservas SET estado = 'cancelado' WHERE id = $1`,
@@ -211,15 +207,19 @@ export const crearHorario = async (req, res) => {
 // Lista todos los horarios, incluidos los inactivos, con el nombre de la
 // clase y del profesor. La ruta pública solo devuelve los activos, así que
 // sin esto el administrador no podía ver ni corregir los que dio de baja.
+// cupos_disponibles son los lugares libres de la semana que viene.
 export const obtenerHorariosAdmin = async (req, res) => {
+  const { desde, hasta } = proximoPeriodo()
   try {
     const resultado = await pool.query(
-      `SELECT h.*, c.nombre AS clase, c.rama, c.activo AS clase_activa,
+      `SELECT h.*, ${LIBRES('h', '$1', '$2')} AS cupos_disponibles,
+              c.nombre AS clase, c.rama, c.activo AS clase_activa,
               u.nombre AS profesor
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        LEFT JOIN usuarios u ON c.profesor_id = u.id
-       ORDER BY c.nombre, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`
+       ORDER BY c.nombre, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
+      [desde, hasta]
     )
     res.json(resultado.rows)
   } catch (error) {
@@ -230,23 +230,27 @@ export const obtenerHorariosAdmin = async (req, res) => {
 
 export const editarHorario = async (req, res) => {
   const { id } = req.params
+  // cupos_disponibles ya no se toma del pedido: el formulario mandaba el
+  // valor de cuando se abrió, y si en el medio reservó alguien, al guardar se
+  // devolvían esos lugares. Ahora se cuentan con las reservas.
   const { dia_semana, hora_inicio, hora_fin,
-          cupos_totales, cupos_disponibles, precio, activo } = req.body
+          cupos_totales, precio, activo } = req.body
 
   const errorHorario = validarHorario({
-    dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio
+    dia_semana, hora_inicio, hora_fin, cupos_totales, precio
   })
   if (errorHorario) {
     return res.status(400).json({ error: errorHorario })
   }
 
   try {
+    // La columna vieja solo se acota al total, para no romper su restricción.
     const resultado = await pool.query(
       `UPDATE horarios SET dia_semana=$1, hora_inicio=$2, hora_fin=$3,
-       cupos_totales=$4, cupos_disponibles=$5, precio=$6, activo=$7
-       WHERE id=$8 RETURNING *`,
+       cupos_totales=$4, cupos_disponibles=LEAST(cupos_disponibles, $4), precio=$5, activo=$6
+       WHERE id=$7 RETURNING *`,
       [dia_semana, hora_inicio, hora_fin,
-       cupos_totales, cupos_disponibles, precio, activo, id]
+       cupos_totales, precio, activo, id]
     )
 
     if (resultado.rows.length > 0) {
