@@ -1,16 +1,21 @@
 import pool from '../db/conexion.js'
 import bcrypt from 'bcryptjs'
 import { randomInt } from 'node:crypto'
-import { validarHorario, validarClase, ORDEN_DIA, validarDatosUsuario } from '../utils/validaciones.js'
+import {
+  validarHorario, validarClase, validarDatosUsuario, normalizarDias, nombreDia, textoDias
+} from '../utils/validaciones.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { olvidarUsuario } from '../middlewares/authMiddleware.js'
-import { LIBRES, proximoPeriodo } from '../utils/cupos.js'
+import { LIBRES, ORDEN_HORARIO, proximoPeriodo } from '../utils/cupos.js'
+import { liberarFijasYAvisar } from '../utils/planes.js'
 
 // ─── CLASES ───────────────────────────────────────────
 
 // La base contesta 23503 cuando el profesor_id no es de ningún usuario.
 const PROFESOR_INEXISTENTE = '23503'
+// El mismo código, para clases inexistentes o horarios con reservas.
+const CLAVE_FORANEA = PROFESOR_INEXISTENTE
 
 export const crearClase = async (req, res) => {
   const { rama, profesor_id = null, descripcion } = req.body
@@ -190,33 +195,48 @@ export const obtenerClases = async (req, res) => {
 
 // ─── HORARIOS ─────────────────────────────────────────
 
-export const crearHorario = async (req, res) => {
-  const { clase_id, dia_semana, hora_inicio, hora_fin,
-          cupos_totales, precio } = req.body
+// Un horario tiene varios días con la misma hora (migración 013): "lunes,
+// miércoles y viernes de 17 a 18:30". Se carga una vez y el precio es el de
+// la semana completa.
 
-  const errorHorario = validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, precio })
+export const crearHorario = async (req, res) => {
+  const { clase_id, hora_inicio, hora_fin, cupos_totales, precio } = req.body
+
+  const errorHorario = validarHorario({ dias: req.body.dias ?? [], hora_inicio, hora_fin, cupos_totales, precio })
   if (errorHorario) {
     return res.status(400).json({ error: errorHorario })
   }
+  if (!hora_inicio || !hora_fin || cupos_totales === undefined || precio === undefined) {
+    return res.status(400).json({ error: 'Faltan datos del horario' })
+  }
+  const { dias } = normalizarDias(req.body.dias)
+  const claseId = Number(clase_id)
+  if (!Number.isInteger(claseId) || claseId <= 0) {
+    return res.status(400).json({ error: 'Elegí una clase' })
+  }
 
   try {
+    // dia_semana guarda el primero: solo lo lee el backend anterior.
     const resultado = await pool.query(
-      `INSERT INTO horarios 
-       (clase_id, dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio)
-       VALUES ($1, $2, $3, $4, $5, $5, $6)
+      `INSERT INTO horarios
+       (clase_id, dias, dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio)
+       VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
        RETURNING *`,
-      [clase_id, dia_semana, hora_inicio, hora_fin, cupos_totales, precio]
+      [claseId, dias, nombreDia(dias[0]), hora_inicio, hora_fin, cupos_totales, precio]
     )
 
     anotarActividad({
       usuario_id: req.usuario.id, accion: 'horario.crear', entidad: 'horario',
-      entidad_id: resultado.rows[0].id, detalle: { dia_semana, hora_inicio, precio }
+      entidad_id: resultado.rows[0].id, detalle: { dias: textoDias(dias), hora_inicio, precio }
     })
 
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
     res.status(201).json(resultado.rows[0])
   } catch (error) {
+    if (error.code === CLAVE_FORANEA) {
+      return res.status(400).json({ error: 'La clase elegida no existe' })
+    }
     console.error(error)
     res.status(500).json({ error: 'Error al crear el horario' })
   }
@@ -225,18 +245,21 @@ export const crearHorario = async (req, res) => {
 // Lista todos los horarios, incluidos los inactivos, con el nombre de la
 // clase y del profesor. La ruta pública solo devuelve los activos, así que
 // sin esto el administrador no podía ver ni corregir los que dio de baja.
-// cupos_disponibles son los lugares libres de la semana que viene.
+// cupos_disponibles son los lugares libres de la semana que viene; `fijos`,
+// los que ocupan socios con plan.
 export const obtenerHorariosAdmin = async (req, res) => {
   const { desde, hasta } = proximoPeriodo()
   try {
+    await liberarFijasYAvisar(req.app.get('io'))
     const resultado = await pool.query(
       `SELECT h.*, ${LIBRES('h', '$1', '$2')} AS cupos_disponibles,
+              (SELECT COUNT(*)::int FROM reservas_fijas rf WHERE rf.horario_id = h.id) AS fijos,
               c.nombre AS clase, c.rama, c.activo AS clase_activa,
               u.nombre AS profesor
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        LEFT JOIN usuarios u ON c.profesor_id = u.id
-       ORDER BY c.nombre, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
+       ORDER BY c.nombre, ${ORDEN_HORARIO('h')}`,
       [desde, hasta]
     )
     res.json(resultado.rows)
@@ -246,44 +269,75 @@ export const obtenerHorariosAdmin = async (req, res) => {
   }
 }
 
+/**
+ * Cambia solo lo que trae el pedido. El interruptor de activo del panel manda
+ * nada más `{ activo }`: antes se escribían todos los campos siempre, y un
+ * pedido parcial los habría dejado en NULL.
+ */
 export const editarHorario = async (req, res) => {
-  const { id } = req.params
-  // cupos_disponibles ya no se toma del pedido: el formulario mandaba el
-  // valor de cuando se abrió, y si en el medio reservó alguien, al guardar se
-  // devolvían esos lugares. Ahora se cuentan con las reservas.
-  const { dia_semana, hora_inicio, hora_fin,
-          cupos_totales, precio, activo } = req.body
-
-  const errorHorario = validarHorario({
-    dia_semana, hora_inicio, hora_fin, cupos_totales, precio
-  })
-  if (errorHorario) {
-    return res.status(400).json({ error: errorHorario })
+  const id = Number(req.params.id)
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: 'Horario inválido' })
   }
 
+  const client = await pool.connect()
   try {
+    await client.query('BEGIN')
+    const actual = await client.query('SELECT * FROM horarios WHERE id = $1 FOR UPDATE', [id])
+    if (actual.rows.length === 0) {
+      await client.query('ROLLBACK')
+      return res.status(404).json({ error: 'El horario no existe' })
+    }
+    const previo = actual.rows[0]
+    const tomar = (campo) => req.body[campo] === undefined ? previo[campo] : req.body[campo]
+
+    // cupos_disponibles ya no se toma del pedido: se cuentan con las reservas.
+    const datos = {
+      dias: tomar('dias'),
+      hora_inicio: String(tomar('hora_inicio')),
+      hora_fin: String(tomar('hora_fin')),
+      cupos_totales: tomar('cupos_totales'),
+      precio: tomar('precio')
+    }
+    const errorHorario = validarHorario(datos)
+    if (errorHorario) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: errorHorario })
+    }
+    const { dias } = normalizarDias(datos.dias)
+    const activo = req.body.activo === undefined ? previo.activo : Boolean(req.body.activo)
+
     // La columna vieja solo se acota al total, para no romper su restricción.
-    const resultado = await pool.query(
-      `UPDATE horarios SET dia_semana=$1, hora_inicio=$2, hora_fin=$3,
-       cupos_totales=$4, cupos_disponibles=LEAST(cupos_disponibles, $4), precio=$5, activo=$6
-       WHERE id=$7 RETURNING *`,
-      [dia_semana, hora_inicio, hora_fin,
-       cupos_totales, precio, activo, id]
+    const resultado = await client.query(
+      `UPDATE horarios SET dias=$1, dia_semana=$2, hora_inicio=$3, hora_fin=$4,
+       cupos_totales=$5, cupos_disponibles=LEAST(cupos_disponibles, $5), precio=$6, activo=$7
+       WHERE id=$8 RETURNING *`,
+      [dias, nombreDia(dias[0]), datos.hora_inicio, datos.hora_fin,
+       datos.cupos_totales, datos.precio, activo, id]
     )
 
-    if (resultado.rows.length > 0) {
-      anotarActividad({
-        usuario_id: req.usuario.id, accion: 'horario.editar', entidad: 'horario',
-        entidad_id: Number(id), detalle: { dia_semana, hora_inicio, precio }
-      })
-      // Si el admin sumó cupos, los que esperaban se enteran.
-      avisarCupoLibre(req.app.get('io'), [Number(id)])
-    }
+    const soloActivo = Object.keys(req.body).every(k => k === 'activo')
+    await registrarActividad(client, {
+      usuario_id: req.usuario.id,
+      accion: soloActivo ? (activo ? 'horario.activar' : 'horario.desactivar') : 'horario.editar',
+      entidad: 'horario',
+      entidad_id: id,
+      detalle: { dias: textoDias(dias), hora_inicio: datos.hora_inicio, precio: datos.precio }
+    })
+    await client.query('COMMIT')
+
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
+    // Si el admin sumó cupos o lo reactivó, los que esperaban se enteran.
+    avisarCupoLibre(io, [id])
 
     res.json(resultado.rows[0])
   } catch (error) {
+    await client.query('ROLLBACK')
     console.error(error)
     res.status(500).json({ error: 'Error al editar el horario' })
+  } finally {
+    client.release()
   }
 }
 
@@ -291,20 +345,25 @@ export const eliminarHorario = async (req, res) => {
   const { id } = req.params
   try {
     const borrado = await pool.query(
-      'DELETE FROM horarios WHERE id = $1 RETURNING dia_semana, hora_inicio',
+      'DELETE FROM horarios WHERE id = $1 RETURNING dias, hora_inicio',
       [id]
     )
 
     if (borrado.rows.length > 0) {
       anotarActividad({
         usuario_id: req.usuario.id, accion: 'horario.eliminar', entidad: 'horario',
-        entidad_id: Number(id), detalle: borrado.rows[0]
+        entidad_id: Number(id),
+        detalle: { dias: textoDias(borrado.rows[0].dias), hora_inicio: borrado.rows[0].hora_inicio }
       })
     }
     const io = req.app.get('io')
     io.emit('actualizacion_horarios', { mensaje: 'Clases actualizadas' })
     res.json({ mensaje: 'Horario eliminado correctamente' })
   } catch (error) {
+    // Con reservas o lugares fijos, la base no deja borrarlo.
+    if (error.code === CLAVE_FORANEA) {
+      return res.status(409).json({ error: 'Tiene reservas o lugares fijos: desactivalo en vez de borrarlo' })
+    }
     console.error(error)
     res.status(500).json({ error: 'Error al eliminar el horario' })
   }
@@ -607,7 +666,7 @@ export const obtenerReservas = async (req, res) => {
   try {
     const resultado = await pool.query(
       `SELECT r.*, u.nombre AS alumno, u.dni, u.telefono,
-              c.nombre AS clase, h.dia_semana, h.hora_inicio,
+              c.nombre AS clase, h.dias, h.hora_inicio,
               p.metodo, p.estado AS estado_pago
        FROM reservas r
        JOIN usuarios u ON r.usuario_id = u.id

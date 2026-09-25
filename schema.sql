@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict sp2NC4myj9DyWnWP8XDpntLZSLFqT3tXDxEakvknDUMwfCqnJ33nyLZgp1SPaeh
+\restrict RogIE0GULKI1464VfXT1hJgllRBlowiGpxAw7rKoLNBXHRzvhy2tETz88ls2dsH
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.3
@@ -153,9 +153,11 @@ CREATE TABLE public.config_cuota (
     dias_gracia integer DEFAULT 6 NOT NULL,
     precio numeric(10,2) DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    margen_ingreso_min integer DEFAULT 30 NOT NULL,
     CONSTRAINT config_cuota_dia_vencimiento_check CHECK (((dia_vencimiento >= 1) AND (dia_vencimiento <= 28))),
     CONSTRAINT config_cuota_dias_gracia_check CHECK (((dias_gracia >= 0) AND (dias_gracia <= 30))),
     CONSTRAINT config_cuota_id_check CHECK ((id = 1)),
+    CONSTRAINT config_cuota_margen_check CHECK (((margen_ingreso_min >= 0) AND (margen_ingreso_min <= 180))),
     CONSTRAINT config_cuota_modo_vencimiento_check CHECK (((modo_vencimiento)::text = ANY (ARRAY[('mensual'::character varying)::text, ('dia_fijo'::character varying)::text]))),
     CONSTRAINT config_cuota_precio_check CHECK ((precio >= (0)::numeric))
 );
@@ -226,11 +228,20 @@ CREATE TABLE public.horarios (
     precio numeric(10,2) NOT NULL,
     activo boolean DEFAULT true,
     created_at timestamp without time zone DEFAULT now(),
+    dias smallint[] NOT NULL,
     CONSTRAINT horarios_cupos_check CHECK (((cupos_totales > 0) AND ((cupos_disponibles >= 0) AND (cupos_disponibles <= cupos_totales)))),
     CONSTRAINT horarios_dia_semana_check CHECK (((dia_semana)::text = ANY (ARRAY[('Lunes'::character varying)::text, ('Martes'::character varying)::text, ('Miércoles'::character varying)::text, ('Jueves'::character varying)::text, ('Viernes'::character varying)::text, ('Sábado'::character varying)::text, ('Domingo'::character varying)::text]))),
+    CONSTRAINT horarios_dias_check CHECK ((((cardinality(dias) >= 1) AND (cardinality(dias) <= 7)) AND (dias <@ ARRAY[(1)::smallint, (2)::smallint, (3)::smallint, (4)::smallint, (5)::smallint, (6)::smallint, (7)::smallint]))),
     CONSTRAINT horarios_horas_check CHECK ((hora_fin > hora_inicio)),
     CONSTRAINT horarios_precio_check CHECK ((precio >= (0)::numeric))
 );
+
+
+--
+-- Name: COLUMN horarios.dia_semana; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.horarios.dia_semana IS 'Sin uso desde la migración 013: los días están en dias. Guarda el primero.';
 
 
 --
@@ -238,6 +249,13 @@ CREATE TABLE public.horarios (
 --
 
 COMMENT ON COLUMN public.horarios.cupos_disponibles IS 'Sin uso desde la migración 011: los lugares libres se cuentan por semana con las reservas.';
+
+
+--
+-- Name: COLUMN horarios.precio; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.horarios.precio IS 'Precio de la semana completa (todos los días del horario).';
 
 
 --
@@ -272,7 +290,8 @@ CREATE TABLE public.ingresos (
     registrado_por integer,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     id_local character varying(40),
-    CONSTRAINT ingresos_resultado_check CHECK (((resultado)::text = ANY (ARRAY[('al_dia'::character varying)::text, ('gracia'::character varying)::text, ('vencida'::character varying)::text, ('sin_cuota'::character varying)::text, ('personal'::character varying)::text, ('baja'::character varying)::text, ('no_registrado'::character varying)::text])))
+    clase character varying(100),
+    CONSTRAINT ingresos_resultado_check CHECK (((resultado)::text = ANY ((ARRAY['al_dia'::character varying, 'gracia'::character varying, 'vencida'::character varying, 'sin_cuota'::character varying, 'personal'::character varying, 'baja'::character varying, 'no_registrado'::character varying, 'fuera_horario'::character varying, 'pago_pendiente'::character varying])::text[])))
 );
 
 
@@ -359,6 +378,8 @@ CREATE TABLE public.pagos_cuota (
     vence_nuevo date NOT NULL,
     registrado_por integer,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    plan_id integer,
+    plan_nombre character varying(100),
     CONSTRAINT pagos_cuota_meses_check CHECK (((meses >= 1) AND (meses <= 12))),
     CONSTRAINT pagos_cuota_metodo_check CHECK (((metodo)::text = ANY (ARRAY[('efectivo'::character varying)::text, ('transferencia'::character varying)::text, ('mercadopago'::character varying)::text, ('otro'::character varying)::text]))),
     CONSTRAINT pagos_cuota_monto_check CHECK ((monto >= (0)::numeric))
@@ -403,6 +424,52 @@ CREATE SEQUENCE public.pagos_id_seq
 --
 
 ALTER SEQUENCE public.pagos_id_seq OWNED BY public.pagos.id;
+
+
+--
+-- Name: plan_clases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.plan_clases (
+    plan_id integer NOT NULL,
+    clase_id integer NOT NULL
+);
+
+
+--
+-- Name: planes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.planes (
+    id integer NOT NULL,
+    nombre character varying(100) NOT NULL,
+    descripcion text,
+    precio numeric(10,2) NOT NULL,
+    incluye_todo boolean DEFAULT false NOT NULL,
+    activo boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT planes_precio_check CHECK (((precio >= (0)::numeric) AND (precio <= (99999999)::numeric)))
+);
+
+
+--
+-- Name: planes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.planes_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: planes_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.planes_id_seq OWNED BY public.planes.id;
 
 
 --
@@ -494,6 +561,38 @@ CREATE TABLE public.reservas (
     CONSTRAINT reservas_tipo_check CHECK (((tipo)::text = ANY (ARRAY[('semanal'::character varying)::text, ('quincenal'::character varying)::text]))),
     CONSTRAINT reservas_total_check CHECK ((total >= (0)::numeric))
 );
+
+
+--
+-- Name: reservas_fijas; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.reservas_fijas (
+    id integer NOT NULL,
+    usuario_id integer NOT NULL,
+    horario_id integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: reservas_fijas_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.reservas_fijas_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: reservas_fijas_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.reservas_fijas_id_seq OWNED BY public.reservas_fijas.id;
 
 
 --
@@ -634,6 +733,9 @@ CREATE TABLE public.usuarios (
     cuota_vence date,
     sesion_version integer DEFAULT 0 NOT NULL,
     cuenta_puerta boolean DEFAULT false NOT NULL,
+    plan_id integer,
+    plan_pedido_id integer,
+    plan_pedido_at timestamp with time zone,
     CONSTRAINT usuarios_dni_o_puerta_check CHECK (((dni IS NOT NULL) OR cuenta_puerta)),
     CONSTRAINT usuarios_puerta_rol_check CHECK (((NOT cuenta_puerta) OR ((rol)::text = 'recepcion'::text))),
     CONSTRAINT usuarios_rol_check CHECK (((rol)::text = ANY (ARRAY[('alumno'::character varying)::text, ('profesor'::character varying)::text, ('profesional'::character varying)::text, ('admin'::character varying)::text, ('recepcion'::character varying)::text])))
@@ -724,6 +826,13 @@ ALTER TABLE ONLY public.pagos_cuota ALTER COLUMN id SET DEFAULT nextval('public.
 
 
 --
+-- Name: planes id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.planes ALTER COLUMN id SET DEFAULT nextval('public.planes_id_seq'::regclass);
+
+
+--
 -- Name: plantillas_rutina id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -742,6 +851,13 @@ ALTER TABLE ONLY public.progreso ALTER COLUMN id SET DEFAULT nextval('public.pro
 --
 
 ALTER TABLE ONLY public.reservas ALTER COLUMN id SET DEFAULT nextval('public.reservas_id_seq'::regclass);
+
+
+--
+-- Name: reservas_fijas id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservas_fijas ALTER COLUMN id SET DEFAULT nextval('public.reservas_fijas_id_seq'::regclass);
 
 
 --
@@ -885,6 +1001,22 @@ ALTER TABLE ONLY public.pagos
 
 
 --
+-- Name: plan_clases plan_clases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_clases
+    ADD CONSTRAINT plan_clases_pkey PRIMARY KEY (plan_id, clase_id);
+
+
+--
+-- Name: planes planes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.planes
+    ADD CONSTRAINT planes_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: plantillas_rutina plantillas_rutina_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -898,6 +1030,22 @@ ALTER TABLE ONLY public.plantillas_rutina
 
 ALTER TABLE ONLY public.progreso
     ADD CONSTRAINT progreso_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reservas_fijas reservas_fijas_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservas_fijas
+    ADD CONSTRAINT reservas_fijas_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: reservas_fijas reservas_fijas_usuario_id_horario_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservas_fijas
+    ADD CONSTRAINT reservas_fijas_usuario_id_horario_id_key UNIQUE (usuario_id, horario_id);
 
 
 --
@@ -1028,6 +1176,13 @@ CREATE INDEX pagos_cuota_usuario_idx ON public.pagos_cuota USING btree (usuario_
 
 
 --
+-- Name: planes_nombre_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX planes_nombre_idx ON public.planes USING btree (lower((nombre)::text));
+
+
+--
 -- Name: plantillas_rutina_nombre_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1039,6 +1194,13 @@ CREATE UNIQUE INDEX plantillas_rutina_nombre_idx ON public.plantillas_rutina USI
 --
 
 CREATE INDEX progreso_usuario_idx ON public.progreso USING btree (usuario_id, medida, fecha);
+
+
+--
+-- Name: reservas_fijas_horario_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX reservas_fijas_horario_idx ON public.reservas_fijas USING btree (horario_id);
 
 
 --
@@ -1160,6 +1322,14 @@ ALTER TABLE ONLY public.lista_espera
 
 
 --
+-- Name: pagos_cuota pagos_cuota_plan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.pagos_cuota
+    ADD CONSTRAINT pagos_cuota_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.planes(id) ON DELETE SET NULL;
+
+
+--
 -- Name: pagos_cuota pagos_cuota_registrado_por_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1184,6 +1354,22 @@ ALTER TABLE ONLY public.pagos
 
 
 --
+-- Name: plan_clases plan_clases_clase_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_clases
+    ADD CONSTRAINT plan_clases_clase_id_fkey FOREIGN KEY (clase_id) REFERENCES public.clases(id) ON DELETE CASCADE;
+
+
+--
+-- Name: plan_clases plan_clases_plan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.plan_clases
+    ADD CONSTRAINT plan_clases_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.planes(id) ON DELETE CASCADE;
+
+
+--
 -- Name: plantillas_rutina plantillas_rutina_creador_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1197,6 +1383,22 @@ ALTER TABLE ONLY public.plantillas_rutina
 
 ALTER TABLE ONLY public.progreso
     ADD CONSTRAINT progreso_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios(id) ON DELETE CASCADE;
+
+
+--
+-- Name: reservas_fijas reservas_fijas_horario_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservas_fijas
+    ADD CONSTRAINT reservas_fijas_horario_id_fkey FOREIGN KEY (horario_id) REFERENCES public.horarios(id);
+
+
+--
+-- Name: reservas_fijas reservas_fijas_usuario_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.reservas_fijas
+    ADD CONSTRAINT reservas_fijas_usuario_id_fkey FOREIGN KEY (usuario_id) REFERENCES public.usuarios(id) ON DELETE CASCADE;
 
 
 --
@@ -1248,10 +1450,26 @@ ALTER TABLE ONLY public.turnos_profe
 
 
 --
+-- Name: usuarios usuarios_plan_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.usuarios
+    ADD CONSTRAINT usuarios_plan_id_fkey FOREIGN KEY (plan_id) REFERENCES public.planes(id);
+
+
+--
+-- Name: usuarios usuarios_plan_pedido_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.usuarios
+    ADD CONSTRAINT usuarios_plan_pedido_id_fkey FOREIGN KEY (plan_pedido_id) REFERENCES public.planes(id) ON DELETE SET NULL;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict sp2NC4myj9DyWnWP8XDpntLZSLFqT3tXDxEakvknDUMwfCqnJ33nyLZgp1SPaeh
+\unrestrict RogIE0GULKI1464VfXT1hJgllRBlowiGpxAw7rKoLNBXHRzvhy2tETz88ls2dsH
 
 
 --

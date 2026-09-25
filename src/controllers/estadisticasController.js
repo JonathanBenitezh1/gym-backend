@@ -53,8 +53,8 @@ export const obtenerEstadisticas = async (req, res) => {
       // Ocupacion de esta semana en cada horario activo: lugares tomados
       // sobre el total, contados con las reservas.
       pool.query(
-        `SELECT id, clase, dia_semana, hora_inicio, cupos_totales, ocupados FROM (
-           SELECT h.id, c.nombre AS clase, h.dia_semana, h.hora_inicio, h.cupos_totales,
+        `SELECT id, clase, dias, hora_inicio, cupos_totales, ocupados FROM (
+           SELECT h.id, c.nombre AS clase, h.dias, h.hora_inicio, h.cupos_totales,
                   (h.cupos_totales - ${LIBRES('h', '$1', '$2')})::int AS ocupados
            FROM horarios h JOIN clases c ON c.id = h.clase_id
            WHERE h.activo AND c.activo
@@ -81,8 +81,8 @@ export const obtenerEstadisticas = async (req, res) => {
       ),
       // Pasadas por la puerta hoy. ingresos.created_at es TIMESTAMPTZ.
       pool.query(
-        `SELECT COUNT(*) FILTER (WHERE resultado IN ('al_dia', 'gracia', 'personal'))::int AS entraron,
-                COUNT(*) FILTER (WHERE resultado NOT IN ('al_dia', 'gracia', 'personal'))::int AS rechazados
+        `SELECT COUNT(*) FILTER (WHERE resultado IN ('al_dia', 'gracia', 'personal', 'pago_pendiente'))::int AS entraron,
+                COUNT(*) FILTER (WHERE resultado NOT IN ('al_dia', 'gracia', 'personal', 'pago_pendiente'))::int AS rechazados
          FROM ingresos
          WHERE (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date = ${HOY_AR}`
       ),
@@ -93,7 +93,7 @@ export const obtenerEstadisticas = async (req, res) => {
         `WITH entradas AS (
            SELECT (created_at AT TIME ZONE 'America/Argentina/Buenos_Aires') AS fecha
            FROM ingresos
-           WHERE resultado IN ('al_dia', 'gracia', 'personal')
+           WHERE resultado IN ('al_dia', 'gracia', 'personal', 'pago_pendiente')
              AND created_at >= now() - interval '30 days'
          ), dias AS (SELECT GREATEST(COUNT(DISTINCT fecha::date), 1) AS n FROM entradas)
          SELECT EXTRACT(HOUR FROM fecha)::int AS hora,

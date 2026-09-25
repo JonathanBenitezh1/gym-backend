@@ -4,7 +4,10 @@ import {
   crearReserva,
   obtenerMisReservas,
   cancelarReserva,
-  obtenerHorariosReservados
+  obtenerHorariosReservados,
+  tomarFijos,
+  dejarFijo,
+  obtenerMisFijos
 } from '../controllers/reservasController.js'
 
 const router = Router()
@@ -16,5 +19,10 @@ router.post('/', crearReserva)
 router.get('/mis-reservas', obtenerMisReservas)
 router.put('/:id/cancelar', cancelarReserva)
 router.get('/reservados', obtenerHorariosReservados)
+
+// Lugares fijos del plan mensual
+router.get('/fijos', obtenerMisFijos)
+router.post('/fijos', tomarFijos)
+router.delete('/fijos/:horario_id', dejarFijo)
 
 export default router

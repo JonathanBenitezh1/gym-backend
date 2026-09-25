@@ -1,7 +1,34 @@
 import pool from '../db/conexion.js'
-import { estadoCuota } from '../utils/cuota.js'
 import { leerConfig } from './cuotaController.js'
 import { anotarActividad } from '../utils/auditoria.js'
+import { ahoraEnArgentina, decidirIngreso } from '../utils/ingreso.js'
+
+/**
+ * Lo que tiene reservado cada socio, para decidir en la puerta (migración
+ * 013): sus lugares fijos del plan y sus semanales que todavía no
+ * terminaron. `$1` es hoy; `$2`, un socio, o null para todos (el padrón).
+ */
+const CLASES_DE_SOCIOS = `
+  SELECT rf.usuario_id, c.nombre AS clase, h.dias, h.hora_inicio, h.hora_fin,
+         'fijo' AS tipo, NULL AS desde, NULL AS hasta, true AS pagado
+  FROM reservas_fijas rf
+  JOIN horarios h ON h.id = rf.horario_id
+  JOIN clases c ON c.id = h.clase_id
+  WHERE h.activo AND c.activo AND ($2::int IS NULL OR rf.usuario_id = $2)
+  UNION ALL
+  SELECT r.usuario_id, c.nombre, h.dias, h.hora_inicio, h.hora_fin,
+         'semanal', to_char(r.fecha_inicio, 'YYYY-MM-DD'), to_char(r.fecha_fin, 'YYYY-MM-DD'),
+         r.estado = 'pagado'
+  FROM reservas r
+  JOIN horarios h ON h.id = r.horario_id
+  JOIN clases c ON c.id = h.clase_id
+  WHERE r.estado <> 'cancelado' AND r.fecha_fin > $1::date
+    AND h.activo AND c.activo AND ($2::int IS NULL OR r.usuario_id = $2)`
+
+// La hora sale como 17:00:00; para la pantalla alcanza con 17:00.
+const limpiarClase = ({ usuario_id, ...c }) => ({
+  ...c, hora_inicio: c.hora_inicio.slice(0, 5), hora_fin: c.hora_fin.slice(0, 5)
+})
 
 const RE_DNI = /^\d{7,8}$/
 const PERSONAL = ['profesor', 'profesional', 'admin', 'recepcion']
@@ -27,13 +54,14 @@ export const registrarIngreso = async (req, res) => {
       leerConfig(),
       pool.query(
         `SELECT u.id, u.nombre, u.rol, u.activo,
-                to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence,
+                to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence, p.nombre AS plan,
                 EXISTS (SELECT 1 FROM fotos_socio f WHERE f.usuario_id = u.id) AS tiene_foto,
                 (SELECT EXTRACT(EPOCH FROM now() - i.created_at)::int / 60
                    FROM ingresos i
-                  WHERE i.usuario_id = u.id AND i.resultado IN ('al_dia', 'gracia', 'personal')
+                  WHERE i.usuario_id = u.id AND i.resultado IN ('al_dia', 'gracia', 'personal', 'pago_pendiente')
                   ORDER BY i.created_at DESC LIMIT 1) AS minutos_desde_ultimo
-         FROM usuarios u WHERE u.dni = $1`,
+         FROM usuarios u LEFT JOIN planes p ON p.id = u.plan_id
+         WHERE u.dni = $1`,
         [dni]
       )
     ])
@@ -48,9 +76,14 @@ export const registrarIngreso = async (req, res) => {
       if (!u.activo) resultado = 'baja'
       else if (PERSONAL.includes(u.rol)) resultado = 'personal'
       else {
-        const e = estadoCuota(u.cuota_vence, config.dias_gracia)
-        resultado = e.estado
-        extra = { dias_restantes: e.dias_restantes, cuota_vence: u.cuota_vence }
+        const ahora = ahoraEnArgentina()
+        const clases = await pool.query(CLASES_DE_SOCIOS, [ahora.dia, u.id])
+        const { resultado: decidido, ...detalle } = decidirIngreso(
+          { cuota_vence: u.cuota_vence, plan: u.plan, clases: clases.rows.map(limpiarClase) },
+          { ahora, diasGracia: config.dias_gracia, margen: config.margen_ingreso_min }
+        )
+        resultado = decidido
+        extra = detalle
       }
       const reingreso = u.minutos_desde_ultimo !== null && u.minutos_desde_ultimo < MINUTOS_REINGRESO
       respuesta = {
@@ -64,9 +97,9 @@ export const registrarIngreso = async (req, res) => {
     }
 
     const ingreso = await pool.query(
-      `INSERT INTO ingresos (usuario_id, dni, resultado, registrado_por)
-       VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
-      [u?.id ?? null, dni, respuesta.resultado, req.usuario.id]
+      `INSERT INTO ingresos (usuario_id, dni, resultado, registrado_por, clase)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, created_at`,
+      [u?.id ?? null, dni, respuesta.resultado, req.usuario.id, respuesta.clase ?? null]
     )
 
     // El panel del admin ve los ingresos en vivo.
@@ -84,7 +117,7 @@ export const obtenerUltimosIngresos = async (req, res) => {
   const limite = Math.min(Math.max(Number.parseInt(req.query.limite, 10) || 10, 1), 200)
   try {
     const r = await pool.query(
-      `SELECT i.id, i.dni, i.resultado, i.created_at, u.nombre
+      `SELECT i.id, i.dni, i.resultado, i.clase, i.created_at, u.nombre
        FROM ingresos i LEFT JOIN usuarios u ON u.id = i.usuario_id
        ORDER BY i.created_at DESC LIMIT $1`,
       [limite]
@@ -179,25 +212,44 @@ export const borrarFoto = async (req, res) => {
  */
 export const obtenerPadron = async (req, res) => {
   try {
-    const [config, socios] = await Promise.all([
+    const hoy = ahoraEnArgentina().dia
+    const [config, socios, clases] = await Promise.all([
       leerConfig(),
       pool.query(
         `SELECT u.id AS usuario_id, u.dni, u.nombre, u.rol, u.activo,
-                to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence,
+                to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence, p.nombre AS plan,
                 (EXTRACT(EPOCH FROM f.updated_at) * 1000)::bigint AS foto_version
-         FROM usuarios u LEFT JOIN fotos_socio f ON f.usuario_id = u.id
+         FROM usuarios u
+         LEFT JOIN fotos_socio f ON f.usuario_id = u.id
+         LEFT JOIN planes p ON p.id = u.plan_id
          WHERE u.dni IS NOT NULL`
-      )
+      ),
+      pool.query(CLASES_DE_SOCIOS, [hoy, null])
     ])
+    // Las clases de cada socio van con él: sin conexión, la pantalla decide
+    // con la misma regla que el servidor (utils/ingreso.js).
+    const porSocio = new Map()
+    for (const fila of clases.rows) {
+      if (!porSocio.has(fila.usuario_id)) porSocio.set(fila.usuario_id, [])
+      porSocio.get(fila.usuario_id).push(limpiarClase(fila))
+    }
     res.set('Cache-Control', 'no-store')
-    res.json({ dias_gracia: config.dias_gracia, generado: new Date().toISOString(), socios: socios.rows })
+    res.json({
+      dias_gracia: config.dias_gracia,
+      margen_ingreso_min: config.margen_ingreso_min,
+      generado: new Date().toISOString(),
+      socios: socios.rows.map(s => ({ ...s, clases: porSocio.get(s.usuario_id) ?? [] }))
+    })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'Error al obtener la lista de socios' })
   }
 }
 
-const RESULTADOS = ['al_dia', 'gracia', 'vencida', 'sin_cuota', 'personal', 'baja', 'no_registrado']
+const RESULTADOS = [
+  'al_dia', 'gracia', 'vencida', 'sin_cuota', 'personal', 'baja', 'no_registrado',
+  'fuera_horario', 'pago_pendiente'
+]
 const MAX_LOTE = 500
 const UNA_SEMANA = 7 * 24 * 60 * 60 * 1000
 
@@ -224,11 +276,12 @@ export const recibirLote = async (req, res) => {
   try {
     let guardados = 0
     for (const i of validos) {
+      const clase = typeof i.clase === 'string' ? i.clase.slice(0, 100) : null
       const r = await pool.query(
-        `INSERT INTO ingresos (usuario_id, dni, resultado, registrado_por, created_at, id_local)
-         VALUES ((SELECT id FROM usuarios WHERE dni = $1), $1, $2, $3, $4, $5)
+        `INSERT INTO ingresos (usuario_id, dni, resultado, registrado_por, created_at, id_local, clase)
+         VALUES ((SELECT id FROM usuarios WHERE dni = $1), $1, $2, $3, $4, $5, $6)
          ON CONFLICT (id_local) WHERE id_local IS NOT NULL DO NOTHING`,
-        [i.dni, i.resultado, req.usuario.id, i.fecha, i.id_local]
+        [i.dni, i.resultado, req.usuario.id, i.fecha, i.id_local, clase]
       )
       guardados += r.rowCount
     }

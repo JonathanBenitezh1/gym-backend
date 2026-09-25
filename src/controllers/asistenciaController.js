@@ -3,6 +3,22 @@ import pool from '../db/conexion.js'
 const RE_FECHA = /^\d{4}-\d{2}-\d{2}$/
 
 /**
+ * Quiénes tienen lugar en el horario $1 el día $2: una reserva semanal que
+ * cubre ese día, o un lugar fijo del plan tomado hasta ese día. Si alguien
+ * tiene las dos, cuenta una vez, como fijo.
+ */
+const INSCRIPTOS = `
+  SELECT DISTINCT ON (usuario_id) usuario_id, tipo FROM (
+    SELECT rf.usuario_id, 'fijo' AS tipo, 0 AS orden FROM reservas_fijas rf
+    WHERE rf.horario_id = $1
+      AND (rf.created_at AT TIME ZONE 'America/Argentina/Buenos_Aires')::date <= $2::date
+    UNION ALL
+    SELECT r.usuario_id, 'semanal', 1 FROM reservas r
+    WHERE r.horario_id = $1 AND r.estado IN ('pendiente', 'pagado')
+      AND r.fecha_inicio <= $2::date AND r.fecha_fin > $2::date
+  ) todos ORDER BY usuario_id, orden`
+
+/**
  * Verifica que el horario pertenezca a una clase del profesor.
  * Los administradores pueden acceder a cualquier horario.
  *
@@ -34,20 +50,19 @@ export const obtenerAlumnosDeHorario = async (req, res) => {
       return res.status(403).json({ error: 'No tenés permiso para ver este horario' })
     }
 
+    // Los de la semana y los que tienen lugar fijo por su plan.
     const alumnos = await pool.query(
       `SELECT
         u.id,
         u.nombre,
         u.dni,
+        inscriptos.tipo,
         COALESCE(a.asistio, false) AS asistio
-       FROM reservas r
-       JOIN usuarios u ON r.usuario_id = u.id
+       FROM (${INSCRIPTOS}) inscriptos
+       JOIN usuarios u ON u.id = inscriptos.usuario_id
        LEFT JOIN asistencias a ON a.usuario_id = u.id
          AND a.horario_id = $1
          AND a.fecha = $2
-       WHERE r.horario_id = $1
-       AND r.estado IN ('pendiente', 'pagado')
-       AND r.fecha_inicio <= $2::date AND r.fecha_fin > $2::date
        ORDER BY u.nombre`,
       [horario_id, fecha]
     )
@@ -74,11 +89,8 @@ export const marcarAsistencia = async (req, res) => {
     // no cuenta: con BETWEEN, la semanal de un lunes cubría dos lunes, y el
     // socio que renovaba aparecía dos veces en la lista.
     const tieneReserva = await pool.query(
-      `SELECT 1 FROM reservas
-       WHERE horario_id = $1 AND usuario_id = $2
-       AND estado IN ('pendiente', 'pagado')
-       AND fecha_inicio <= $3::date AND fecha_fin > $3::date`,
-      [horario_id, usuario_id, fecha]
+      `SELECT 1 FROM (${INSCRIPTOS}) inscriptos WHERE usuario_id = $3`,
+      [horario_id, fecha, usuario_id]
     )
     if (tieneReserva.rows.length === 0) {
       return res.status(400).json({

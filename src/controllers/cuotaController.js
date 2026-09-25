@@ -1,6 +1,8 @@
 import pool from '../db/conexion.js'
 import { registrarActividad, anotarActividad } from '../utils/auditoria.js'
 import { estadoCuota, calcularNuevoVence, hoyEnArgentina } from '../utils/cuota.js'
+import { liberarFijas, liberarFijasYAvisar } from '../utils/planes.js'
+import { avisarCupoLibre } from './esperaController.js'
 
 const METODOS = ['efectivo', 'transferencia', 'mercadopago', 'otro']
 
@@ -22,7 +24,8 @@ const fechaValida = (texto) => {
 
 export async function leerConfig(ejecutor = pool) {
   const r = await ejecutor.query(
-    `SELECT modo_vencimiento, dia_vencimiento, dias_gracia, precio::float AS precio
+    `SELECT modo_vencimiento, dia_vencimiento, dias_gracia, precio::float AS precio,
+            margen_ingreso_min
      FROM config_cuota WHERE id = 1`
   )
   return r.rows[0]
@@ -40,10 +43,13 @@ export const obtenerConfigCuota = async (req, res) => {
 }
 
 export const guardarConfigCuota = async (req, res) => {
-  const { modo_vencimiento, dia_vencimiento, dias_gracia, precio } = req.body
+  const { modo_vencimiento, dia_vencimiento, dias_gracia } = req.body
   const dia = Number(dia_vencimiento)
   const gracia = Number(dias_gracia)
-  const monto = aNumero(precio)
+  // Desde los planes (migración 013) el precio es de cada plan: el general
+  // queda por si lo manda la app anterior.
+  const monto = req.body.precio === undefined ? 0 : aNumero(req.body.precio)
+  const margen = Number(req.body.margen_ingreso_min ?? 30)
 
   if (!['mensual', 'dia_fijo'].includes(modo_vencimiento)) {
     return res.status(400).json({ error: 'Elegí cómo vence la cuota' })
@@ -57,17 +63,21 @@ export const guardarConfigCuota = async (req, res) => {
   if (!Number.isFinite(monto) || monto < 0 || monto > 99999999) {
     return res.status(400).json({ error: 'El precio no es válido' })
   }
+  if (!Number.isInteger(margen) || margen < 0 || margen > 180) {
+    return res.status(400).json({ error: 'El margen de la puerta va de 0 a 180 minutos' })
+  }
 
   try {
     await pool.query(
       `UPDATE config_cuota
-       SET modo_vencimiento = $1, dia_vencimiento = $2, dias_gracia = $3, precio = $4, updated_at = now()
+       SET modo_vencimiento = $1, dia_vencimiento = $2, dias_gracia = $3, precio = $4,
+           margen_ingreso_min = $5, updated_at = now()
        WHERE id = 1`,
-      [modo_vencimiento, dia, gracia, monto]
+      [modo_vencimiento, dia, gracia, monto, margen]
     )
     anotarActividad({
       usuario_id: req.usuario.id, accion: 'cuota.config', entidad: 'cuota',
-      detalle: { modo_vencimiento, dia_vencimiento: dia, dias_gracia: gracia, precio: monto }
+      detalle: { modo_vencimiento, dia_vencimiento: dia, dias_gracia: gracia, margen_ingreso_min: margen }
     })
     res.json(await leerConfig())
   } catch (error) {
@@ -86,14 +96,18 @@ export const obtenerCuotas = async (req, res) => {
         // La fecha va como texto: como Date, pg la corre un día por la zona horaria.
         `SELECT u.id, u.nombre, u.dni, u.telefono,
                 to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence,
+                u.plan_id, pl.nombre AS plan, u.plan_pedido_id, pp.nombre AS plan_pedido, u.plan_pedido_at,
+                (SELECT COUNT(*)::int FROM reservas_fijas rf WHERE rf.usuario_id = u.id) AS fijos,
                 ultimo.monto::float AS ultimo_monto, ultimo.created_at AS ultimo_pago
          FROM usuarios u
+         LEFT JOIN planes pl ON pl.id = u.plan_id
+         LEFT JOIN planes pp ON pp.id = u.plan_pedido_id
          LEFT JOIN LATERAL (
            SELECT monto, created_at FROM pagos_cuota
            WHERE usuario_id = u.id ORDER BY created_at DESC LIMIT 1
          ) ultimo ON true
          WHERE u.rol = 'alumno' AND u.activo
-         ORDER BY u.cuota_vence NULLS FIRST, u.nombre`
+         ORDER BY u.plan_pedido_at IS NULL, u.cuota_vence NULLS FIRST, u.nombre`
       )
     ])
     const hoy = hoyEnArgentina()
@@ -118,6 +132,7 @@ export const registrarPagoCuota = async (req, res) => {
   const meses = Number(req.body.meses ?? 1)
   const monto = aNumero(req.body.monto)
   const { metodo } = req.body
+  const plan_id = Number(req.body.plan_id)
 
   if (!Number.isInteger(usuario_id) || usuario_id <= 0) {
     return res.status(400).json({ error: 'Socio inválido' })
@@ -131,13 +146,16 @@ export const registrarPagoCuota = async (req, res) => {
   if (!METODOS.includes(metodo)) {
     return res.status(400).json({ error: 'Elegí cómo pagó' })
   }
+  if (!Number.isInteger(plan_id) || plan_id <= 0) {
+    return res.status(400).json({ error: 'Elegí el plan que paga' })
+  }
 
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
 
     const socio = await client.query(
-      `SELECT id, nombre, rol, activo, to_char(cuota_vence, 'YYYY-MM-DD') AS cuota_vence
+      `SELECT id, nombre, rol, activo, plan_id, to_char(cuota_vence, 'YYYY-MM-DD') AS cuota_vence
        FROM usuarios WHERE id = $1 FOR UPDATE`,
       [usuario_id]
     )
@@ -151,29 +169,52 @@ export const registrarPagoCuota = async (req, res) => {
       return res.status(400).json({ error: 'El socio está dado de baja. Reactivalo antes de cobrarle' })
     }
 
+    // Un plan que dejó de ofrecerse se puede seguir renovando, pero no
+    // asignar de nuevo.
+    const plan = await client.query('SELECT id, nombre, activo FROM planes WHERE id = $1', [plan_id])
+    const p = plan.rows[0]
+    if (!p || (!p.activo && s.plan_id !== plan_id)) {
+      await client.query('ROLLBACK')
+      return res.status(400).json({ error: 'Ese plan ya no está disponible' })
+    }
+
     const config = await leerConfig(client)
     const nuevo = calcularNuevoVence({ venceActual: s.cuota_vence, meses, config })
 
-    await client.query('UPDATE usuarios SET cuota_vence = $1 WHERE id = $2', [nuevo, usuario_id])
-    const pago = await client.query(
-      `INSERT INTO pagos_cuota (usuario_id, monto, metodo, meses, vence_anterior, vence_nuevo, registrado_por)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [usuario_id, monto, metodo, meses, s.cuota_vence, nuevo, req.usuario.id]
+    // Cobrar resuelve el pedido que haya hecho desde la app.
+    await client.query(
+      `UPDATE usuarios SET cuota_vence = $1, plan_id = $2, plan_pedido_id = NULL, plan_pedido_at = NULL
+       WHERE id = $3`,
+      [nuevo, plan_id, usuario_id]
     )
+    const pago = await client.query(
+      `INSERT INTO pagos_cuota
+       (usuario_id, monto, metodo, meses, vence_anterior, vence_nuevo, registrado_por, plan_id, plan_nombre)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [usuario_id, monto, metodo, meses, s.cuota_vence, nuevo, req.usuario.id, plan_id, p.nombre]
+    )
+    // Si cambió de plan, pierde los lugares fijos de las clases que ya no paga.
+    const liberados = await liberarFijas(client)
     await registrarActividad(client, {
       usuario_id: req.usuario.id, accion: 'cuota.pago', entidad: 'cuota',
       entidad_id: pago.rows[0].id, afectado_id: usuario_id,
-      detalle: { monto, metodo, meses, vence_anterior: s.cuota_vence, vence_nuevo: nuevo }
+      detalle: { monto, metodo, meses, plan: p.nombre, vence_anterior: s.cuota_vence, vence_nuevo: nuevo }
     })
 
     await client.query('COMMIT')
 
     // El socio ve su estado nuevo al instante, sin recargar.
-    req.app.get('io').to(`usuario:${usuario_id}`).emit('cuota_actualizada', { cuota_vence: nuevo })
+    const io = req.app.get('io')
+    io.to(`usuario:${usuario_id}`).emit('cuota_actualizada', { cuota_vence: nuevo, plan_id })
+    if (liberados.length > 0) {
+      io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
+      avisarCupoLibre(io, liberados)
+    }
 
     res.status(201).json({
       cuota_vence: nuevo,
       vence_anterior: s.cuota_vence,
+      plan: p.nombre,
       ...estadoCuota(nuevo, config.dias_gracia)
     })
   } catch (error) {
@@ -213,11 +254,59 @@ export const corregirVence = async (req, res) => {
       usuario_id: req.usuario.id, accion: 'cuota.corregir', entidad: 'cuota',
       afectado_id: usuario_id, detalle: { anterior: r.rows[0].anterior, vence }
     })
-    req.app.get('io').to(`usuario:${usuario_id}`).emit('cuota_actualizada', { cuota_vence: vence })
+    const io = req.app.get('io')
+    io.to(`usuario:${usuario_id}`).emit('cuota_actualizada', { cuota_vence: vence })
+    // Si la corrección lo deja vencido, sus lugares fijos se liberan.
+    await liberarFijasYAvisar(io)
     res.json({ cuota_vence: r.rows[0].cuota_vence })
   } catch (error) {
     console.error(error)
     res.status(500).json({ error: 'No se pudo corregir el vencimiento' })
+  }
+}
+
+/**
+ * Cambia el plan sin cobrar: un error de carga, un socio que ya venía
+ * pagando, un cambio de plan a mitad de mes. `plan_id: null` se lo saca. Si
+ * el plan nuevo no incluye una clase, el socio pierde su lugar fijo en ella.
+ */
+export const asignarPlan = async (req, res) => {
+  const usuario_id = Number(req.params.usuario_id)
+  const plan_id = req.body.plan_id === null ? null : Number(req.body.plan_id)
+
+  if (!Number.isInteger(usuario_id) || usuario_id <= 0) {
+    return res.status(400).json({ error: 'Socio inválido' })
+  }
+  if (plan_id !== null && (!Number.isInteger(plan_id) || plan_id <= 0)) {
+    return res.status(400).json({ error: 'Plan inválido' })
+  }
+
+  try {
+    const r = await pool.query(
+      `UPDATE usuarios u SET plan_id = $1,
+              plan_pedido_id = CASE WHEN u.plan_pedido_id = $1 THEN NULL ELSE u.plan_pedido_id END,
+              plan_pedido_at = CASE WHEN u.plan_pedido_id = $1 THEN NULL ELSE u.plan_pedido_at END
+       FROM (SELECT id, plan_id AS anterior FROM usuarios WHERE id = $2) previo
+       WHERE u.id = previo.id AND u.rol = 'alumno'
+       RETURNING previo.anterior`,
+      [plan_id, usuario_id]
+    )
+    if (r.rows.length === 0) {
+      return res.status(404).json({ error: 'No se encontró ese socio' })
+    }
+    anotarActividad({
+      usuario_id: req.usuario.id, accion: 'plan.asignar', entidad: 'plan',
+      entidad_id: plan_id, afectado_id: usuario_id, detalle: { anterior: r.rows[0].anterior, plan_id }
+    })
+    const io = req.app.get('io')
+    io.to(`usuario:${usuario_id}`).emit('cuota_actualizada', { plan_id })
+    await liberarFijasYAvisar(io)
+    res.json({ plan_id })
+  } catch (error) {
+    // 23503: el plan no existe.
+    if (error.code === '23503') return res.status(400).json({ error: 'Ese plan no existe' })
+    console.error(error)
+    res.status(500).json({ error: 'No se pudo cambiar el plan' })
   }
 }
 
@@ -237,7 +326,7 @@ export const obtenerPagosDeSocio = async (req, res) => {
 // Los últimos 24 pagos de cuota de un socio, el más nuevo primero.
 async function leerPagos(usuario_id) {
   const r = await pool.query(
-    `SELECT p.id, p.monto::float AS monto, p.metodo, p.meses, p.created_at,
+    `SELECT p.id, p.monto::float AS monto, p.metodo, p.meses, p.created_at, p.plan_nombre,
             to_char(p.vence_anterior, 'YYYY-MM-DD') AS vence_anterior,
             to_char(p.vence_nuevo, 'YYYY-MM-DD') AS vence_nuevo,
             u.nombre AS registrado_por
@@ -255,17 +344,23 @@ export const obtenerMiCuota = async (req, res) => {
     const [config, yo] = await Promise.all([
       leerConfig(),
       pool.query(
-        `SELECT rol, to_char(cuota_vence, 'YYYY-MM-DD') AS cuota_vence FROM usuarios WHERE id = $1`,
+        `SELECT u.rol, to_char(u.cuota_vence, 'YYYY-MM-DD') AS cuota_vence,
+                u.plan_id, p.nombre AS plan, p.precio::float AS precio, p.incluye_todo,
+                COALESCE((SELECT array_agg(pc.clase_id) FROM plan_clases pc WHERE pc.plan_id = p.id), '{}') AS clases_ids,
+                u.plan_pedido_id, pp.nombre AS plan_pedido
+         FROM usuarios u
+         LEFT JOIN planes p ON p.id = u.plan_id
+         LEFT JOIN planes pp ON pp.id = u.plan_pedido_id
+         WHERE u.id = $1`,
         [req.usuario.id]
       )
     ])
-    const { rol, cuota_vence } = yo.rows[0]
+    const { rol, ...yoMismo } = yo.rows[0]
     if (rol !== 'alumno') return res.json({ estado: 'personal' })
     res.json({
-      cuota_vence,
+      ...yoMismo,
       dias_gracia: config.dias_gracia,
-      precio: config.precio,
-      ...estadoCuota(cuota_vence, config.dias_gracia)
+      ...estadoCuota(yoMismo.cuota_vence, config.dias_gracia)
     })
   } catch (error) {
     console.error(error)

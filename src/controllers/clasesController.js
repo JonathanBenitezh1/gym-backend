@@ -1,16 +1,18 @@
 import pool from '../db/conexion.js'
-import { ORDEN_DIA } from '../utils/validaciones.js'
-import { LIBRES, periodoPedido } from '../utils/cupos.js'
+import { LIBRES, ORDEN_HORARIO, periodoPedido } from '../utils/cupos.js'
+import { liberarFijasYAvisar } from '../utils/planes.js'
 
 // Horarios activos con los lugares libres del período que se va a reservar
 // (?desde y ?hasta que manda la app, o el próximo semanal).
 export const obtenerHorariosDisponibles = async (req, res) => {
   const { desde, hasta } = periodoPedido(req.query)
   try {
+    // Antes de contar: los lugares fijos de planes vencidos quedan libres.
+    await liberarFijasYAvisar(req.app.get('io'))
     const resultado = await pool.query(
       `SELECT 
         h.id,
-        h.dia_semana,
+        h.dias,
         h.hora_inicio,
         h.hora_fin,
         ${LIBRES('h', '$1', '$2')} AS cupos_disponibles,
@@ -26,7 +28,7 @@ export const obtenerHorariosDisponibles = async (req, res) => {
        JOIN clases c ON h.clase_id = c.id
        LEFT JOIN usuarios u ON c.profesor_id = u.id
        WHERE h.activo = true AND c.activo = true
-       ORDER BY c.rama, ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
+       ORDER BY c.nombre, ${ORDEN_HORARIO('h')}`,
       [desde, hasta]
     )
     res.json(resultado.rows)

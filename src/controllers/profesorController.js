@@ -1,8 +1,8 @@
 import pool from '../db/conexion.js'
-import { validarHorario, ORDEN_DIA } from '../utils/validaciones.js'
+import { validarHorario, normalizarDias, nombreDia, textoDias } from '../utils/validaciones.js'
 import { avisarCupoLibre } from './esperaController.js'
 import { anotarActividad } from '../utils/auditoria.js'
-import { LIBRES, proximoPeriodo } from '../utils/cupos.js'
+import { LIBRES, ORDEN_HORARIO, proximoPeriodo } from '../utils/cupos.js'
 
 // ─── MIS CLASES Y HORARIOS ────────────────────────────
 
@@ -31,11 +31,12 @@ export const obtenerMisHorarios = async (req, res) => {
   try {
     const resultado = await pool.query(
       `SELECT h.*, ${LIBRES('h', '$2', '$3')} AS cupos_disponibles,
+              (SELECT COUNT(*)::int FROM reservas_fijas rf WHERE rf.horario_id = h.id) AS fijos,
               c.nombre AS clase, c.rama
        FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        WHERE c.profesor_id = $1
-       ORDER BY ${ORDEN_DIA('h.dia_semana')}, h.hora_inicio`,
+       ORDER BY ${ORDEN_HORARIO('h')}`,
       [profesor_id, desde, hasta]
     )
     res.json(resultado.rows)
@@ -49,19 +50,11 @@ export const modificarHorario = async (req, res) => {
   const { id } = req.params
   const profesor_id = req.usuario.id
   // cupos_disponibles no se toma del pedido: se cuenta con las reservas
-  // (ver editarHorario del admin).
-  const { dia_semana, hora_inicio, hora_fin, cupos_totales, activo } = req.body
-
-  const errorHorario = validarHorario({
-    dia_semana, hora_inicio, hora_fin, cupos_totales
-  })
-  if (errorHorario) {
-    return res.status(400).json({ error: errorHorario })
-  }
+  // (ver editarHorario del admin). El precio lo pone solo el admin.
 
   try {
     const verificacion = await pool.query(
-      `SELECT h.id FROM horarios h
+      `SELECT h.* FROM horarios h
        JOIN clases c ON h.clase_id = c.id
        WHERE h.id = $1 AND c.profesor_id = $2`,
       [id, profesor_id]
@@ -69,20 +62,38 @@ export const modificarHorario = async (req, res) => {
     if (verificacion.rows.length === 0) {
       return res.status(403).json({ error: 'No tenés permiso para modificar este horario' })
     }
+    // Solo cambia lo que viene: antes un campo que faltaba quedaba en NULL.
+    const previo = verificacion.rows[0]
+    const tomar = (campo) => req.body[campo] === undefined ? previo[campo] : req.body[campo]
+    const datos = {
+      dias: tomar('dias'),
+      hora_inicio: String(tomar('hora_inicio')),
+      hora_fin: String(tomar('hora_fin')),
+      cupos_totales: tomar('cupos_totales')
+    }
+    const errorHorario = validarHorario(datos)
+    if (errorHorario) {
+      return res.status(400).json({ error: errorHorario })
+    }
+    const { dias } = normalizarDias(datos.dias)
+    const activo = req.body.activo === undefined ? previo.activo : Boolean(req.body.activo)
+
     const resultado = await pool.query(
       `UPDATE horarios 
-       SET dia_semana=$1, hora_inicio=$2, hora_fin=$3,
-           cupos_totales=$4, cupos_disponibles=LEAST(cupos_disponibles, $4), activo=$5
-       WHERE id=$6 RETURNING *`,
-      [dia_semana, hora_inicio, hora_fin, cupos_totales, activo, id]
+       SET dias=$1, dia_semana=$2, hora_inicio=$3, hora_fin=$4,
+           cupos_totales=$5, cupos_disponibles=LEAST(cupos_disponibles, $5), activo=$6
+       WHERE id=$7 RETURNING *`,
+      [dias, nombreDia(dias[0]), datos.hora_inicio, datos.hora_fin, datos.cupos_totales, activo, id]
     )
     // Igual que cuando edita el admin: sin esto, los cambios de horario y de
     // cupos que hacía el profe no quedaban en Actividad.
     anotarActividad({
       usuario_id: profesor_id, accion: 'horario.editar', entidad: 'horario',
-      entidad_id: Number(id), detalle: { dia_semana, hora_inicio }
+      entidad_id: Number(id), detalle: { dias: textoDias(dias), hora_inicio: datos.hora_inicio }
     })
-    avisarCupoLibre(req.app.get('io'), [Number(id)])
+    const io = req.app.get('io')
+    io.emit('actualizacion_horarios', { mensaje: 'Horarios actualizados' })
+    avisarCupoLibre(io, [Number(id)])
     res.json(resultado.rows[0])
   } catch (error) {
     console.error(error)

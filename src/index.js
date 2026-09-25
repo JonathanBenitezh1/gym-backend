@@ -19,6 +19,7 @@ import esperaRoutes     from './routes/esperaRoutes.js'
 import progresoRoutes   from './routes/progresoRoutes.js'
 import cuotaRoutes      from './routes/cuotaRoutes.js'
 import puertaRoutes     from './routes/puertaRoutes.js'
+import planesRoutes     from './routes/planesRoutes.js'
 import { leerUsuario, sesionVigente } from './middlewares/authMiddleware.js'
 import { limiteGeneral, limitePuerta } from './middlewares/limites.js'
 
@@ -72,6 +73,7 @@ app.use('/api/presencia',  presenciaRoutes)
 app.use('/api/espera',     esperaRoutes)
 app.use('/api/progreso',   progresoRoutes)
 app.use('/api/cuota',      cuotaRoutes)
+app.use('/api/planes',     planesRoutes)
 app.use('/api/puerta',     limitePuerta, puertaRoutes)
 
 app.get('/api/ping', (req, res) => {

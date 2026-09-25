@@ -13,8 +13,9 @@ import { obtenerEstadisticas } from '../controllers/estadisticasController.js'
 import { guardarFoto, borrarFoto } from '../controllers/puertaController.js'
 import {
   obtenerConfigCuota, guardarConfigCuota, obtenerCuotas,
-  registrarPagoCuota, corregirVence, obtenerPagosDeSocio
+  registrarPagoCuota, corregirVence, obtenerPagosDeSocio, asignarPlan
 } from '../controllers/cuotaController.js'
+import { obtenerPlanesAdmin, crearPlan, editarPlan, eliminarPlan } from '../controllers/planesController.js'
 
 const router = Router()
 
@@ -60,6 +61,13 @@ router.put('/cuotas/config', guardarConfigCuota)
 router.post('/cuotas/:usuario_id/pago', registrarPagoCuota)
 router.put('/cuotas/:usuario_id/vence', corregirVence)
 router.get('/cuotas/:usuario_id/pagos', obtenerPagosDeSocio)
+router.put('/cuotas/:usuario_id/plan', asignarPlan)
+
+// Planes mensuales
+router.get('/planes', obtenerPlanesAdmin)
+router.post('/planes', crearPlan)
+router.put('/planes/:id', editarPlan)
+router.delete('/planes/:id', eliminarPlan)
 
 // Estadisticas del panel
 router.get('/estadisticas', obtenerEstadisticas)

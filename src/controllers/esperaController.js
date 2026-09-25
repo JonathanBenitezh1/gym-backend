@@ -1,5 +1,6 @@
 import pool from '../db/conexion.js'
 import { LIBRES, SE_SUPERPONE, proximoPeriodo } from '../utils/cupos.js'
+import { textoDias } from '../utils/validaciones.js'
 
 // La lista de espera es para la semana que reserva la app: la próxima.
 
@@ -11,7 +12,7 @@ export const obtenerMiLista = async (req, res) => {
   try {
     const resultado = await pool.query(
       `SELECT le.horario_id, le.created_at, c.nombre AS clase,
-              h.dia_semana, h.hora_inicio, h.hora_fin,
+              h.dias, h.hora_inicio, h.hora_fin,
               ${LIBRES('h', '$2', '$3')} AS cupos_disponibles
        FROM lista_espera le
        JOIN horarios h ON h.id = le.horario_id
@@ -54,7 +55,9 @@ export const anotarme = async (req, res) => {
     const yaReservo = await pool.query(
       `SELECT 1 FROM reservas r
        WHERE r.usuario_id = $1 AND r.horario_id = $2
-         AND ${SE_SUPERPONE('r', '$3', '$4')}`,
+         AND ${SE_SUPERPONE('r', '$3', '$4')}
+       UNION ALL
+       SELECT 1 FROM reservas_fijas rf WHERE rf.usuario_id = $1 AND rf.horario_id = $2`,
       [usuario_id, horario_id, desde, hasta]
     )
     if (yaReservo.rows.length > 0) {
@@ -112,7 +115,7 @@ export async function avisarCupoLibre(io, horarioIds) {
   try {
     const resultado = await pool.query(
       `SELECT le.usuario_id, h.id AS horario_id, c.nombre AS clase,
-              h.dia_semana, h.hora_inicio
+              h.dias, h.hora_inicio
        FROM lista_espera le
        JOIN horarios h ON h.id = le.horario_id
        JOIN clases c ON c.id = h.clase_id
@@ -124,7 +127,9 @@ export async function avisarCupoLibre(io, horarioIds) {
       io.to(`usuario:${fila.usuario_id}`).emit('cupo_liberado', {
         horario_id: fila.horario_id,
         clase: fila.clase,
-        dia_semana: fila.dia_semana,
+        dias: fila.dias,
+        // La app anterior arma el aviso con este texto.
+        dia_semana: textoDias(fila.dias),
         hora_inicio: fila.hora_inicio
       })
     }

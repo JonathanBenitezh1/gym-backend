@@ -30,7 +30,7 @@ export const obtenerHistorialPagos = async (req, res) => {
         p.estado,
         p.created_at,
         c.nombre AS clase,
-        h.dia_semana,
+        h.dias,
         h.hora_inicio,
         r.tipo,
         r.fecha_inicio,

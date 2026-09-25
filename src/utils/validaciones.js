@@ -59,21 +59,37 @@ export function validarDatosUsuario({ nombre, email, password, dni, telefono }) 
 }
 
 /**
- * Días tal como los guarda la base: texto, no número. La pantalla del panel
- * ofrece de lunes a sábado; se incluye domingo por si algún día se usa.
+ * Nombres de los días. Desde la migración 013 un horario guarda sus días como
+ * números (horarios.dias): 1 = lunes … 7 = domingo, igual que ISODOW.
  */
 export const DIAS_SEMANA = [
   'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'
 ]
 
+export const nombreDia = (numero) => DIAS_SEMANA[numero - 1]
+
+/** "Lunes, Miércoles y Viernes". */
+export function textoDias(dias = []) {
+  const nombres = dias.map(nombreDia).filter(Boolean)
+  return nombres.length <= 1
+    ? (nombres[0] ?? '')
+    : `${nombres.slice(0, -1).join(', ')} y ${nombres.at(-1)}`
+}
+
 /**
- * Para ordenar por día en SQL. `dia_semana` es texto, y ordenarlo tal cual
- * daba Jueves, Lunes, Martes, Miércoles, Sábado, Viernes: la lista de
- * horarios del profe y la del panel salían salteadas. Los días son fijos,
- * no vienen del pedido.
+ * Los días de un horario, ordenados y sin repetir. Devuelve `{ dias }` o
+ * `{ error }`.
  */
-export const ORDEN_DIA = (columna) =>
-  `array_position(ARRAY[${DIAS_SEMANA.map(d => `'${d}'`).join(', ')}]::text[], ${columna}::text)`
+export function normalizarDias(valor) {
+  if (!Array.isArray(valor) || valor.length === 0) {
+    return { error: 'Elegí al menos un día' }
+  }
+  const dias = [...new Set(valor.map(Number))].sort((a, b) => a - b)
+  if (dias.some(d => !Number.isInteger(d) || d < 1 || d > 7)) {
+    return { error: 'Hay un día inválido' }
+  }
+  return { dias }
+}
 
 const RE_HORA = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 
@@ -85,9 +101,10 @@ const RE_HORA = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
  * Sin esto un error de tipeo en el panel dejaba horarios imposibles: la hora
  * de fin antes de la de inicio, cupos negativos o un precio en cero.
  */
-export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totales, precio }) {
-  if (dia_semana !== undefined && !DIAS_SEMANA.includes(String(dia_semana))) {
-    return 'El día tiene que ser uno de la semana, escrito como en el panel'
+export function validarHorario({ dias, hora_inicio, hora_fin, cupos_totales, precio }) {
+  if (dias !== undefined) {
+    const { error } = normalizarDias(dias)
+    if (error) return error
   }
 
   if (hora_inicio !== undefined && !RE_HORA.test(String(hora_inicio))) {
@@ -113,8 +130,8 @@ export function validarHorario({ dia_semana, hora_inicio, hora_fin, cupos_totale
 
   if (precio !== undefined) {
     const valor = Number(precio)
-    if (!Number.isFinite(valor) || valor < 0) {
-      return 'El precio no puede ser negativo'
+    if (precio === null || precio === '' || !Number.isFinite(valor) || valor < 0 || valor > 99999999) {
+      return 'El precio no es válido'
     }
   }
 
@@ -163,10 +180,12 @@ export function validarClase({ nombre, rama, duracion, profesor_id }) {
  * del horario. Antes el precio se calculaba con el tipo pero el período lo
  * elegía el cliente, así que se podía pedir una reserva de cinco años y
  * pagar una semana. Ahora el tipo manda las dos cosas.
+ *
+ * La quincenal salió el 25/09/2026: lo mensual pasó a ser un plan con lugar
+ * fijo (migración 013). La base la sigue aceptando por las reservas viejas.
  */
 export const TIPOS_RESERVA = {
-  semanal:   { dias: 7,  multiplicador: 1 },
-  quincenal: { dias: 14, multiplicador: 2 }
+  semanal: { dias: 7, multiplicador: 1 }
 }
 
 // Tope de horarios por pedido. Sin esto, un array enorme hace cientos de
@@ -227,7 +246,7 @@ export function validarPedidoDeReserva({ horarios_ids, tipo, fecha_inicio }) {
 
   const definicion = TIPOS_RESERVA[tipo]
   if (!definicion) {
-    return { error: 'El tipo de reserva tiene que ser semanal o quincenal' }
+    return { error: 'El tipo de reserva tiene que ser semanal' }
   }
 
   if (!RE_FECHA.test(String(fecha_inicio || ''))) {

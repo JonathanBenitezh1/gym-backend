@@ -1,4 +1,3 @@
-import { ORDEN_DIA } from './validaciones.js'
 import { hoyEnArgentina } from './cuota.js'
 
 /**
@@ -62,7 +61,9 @@ export function periodoPedido({ desde, hasta } = {}, hoy = hoyEnArgentina()) {
 
 /**
  * Lugares libres de un horario en el período [desde, hasta), como expresión
- * SQL: el total menos lo ocupado el día de clase más lleno del período.
+ * SQL: el total menos lo ocupado el día de clase más lleno del período, menos
+ * los lugares fijos de los socios con plan (migración 013), que ocupan todas
+ * las semanas.
  *
  * `horario` es el alias de la tabla horarios en la consulta; `desde` y
  * `hasta`, los parámetros ($1, $2...). Nada de esto viene del pedido.
@@ -74,8 +75,15 @@ export const LIBRES = (horario, desde, hasta) => `GREATEST(${horario}.cupos_tota
         AND r.fecha_inicio <= g.dia::date AND r.fecha_fin > g.dia::date
     ))
     FROM generate_series(${desde}::timestamp, ${hasta}::timestamp - interval '1 day', interval '1 day') AS g(dia)
-    WHERE EXTRACT(ISODOW FROM g.dia) = ${ORDEN_DIA(`${horario}.dia_semana`)}
-  ), 0), 0)::int`
+    WHERE EXTRACT(ISODOW FROM g.dia)::int = ANY(${horario}.dias::int[])
+  ), 0) - (SELECT COUNT(*) FROM reservas_fijas rf WHERE rf.horario_id = ${horario}.id), 0)::int`
+
+/** Para ordenar horarios por su primer día y su hora. */
+export const ORDEN_HORARIO = (horario) => `${horario}.dias[1], ${horario}.hora_inicio`
+
+/** Dos horarios que comparten algún día y se pisan en la hora. */
+export const SE_PISAN = (a, b) =>
+  `${a}.dias && ${b}.dias AND ${a}.hora_inicio < ${b}.hora_fin AND ${a}.hora_fin > ${b}.hora_inicio`
 
 /** Una reserva no cancelada que se superpone con [desde, hasta). */
 export const SE_SUPERPONE = (reserva, desde, hasta) =>

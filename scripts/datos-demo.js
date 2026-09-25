@@ -2,9 +2,11 @@
  * Datos de demostración: la app con las pantallas llenas, para probar y para
  * mostrar sin tener que inventar nada en el momento.
  *
- * Carga un admin, un profe y seis socios, cuatro clases con sus horarios,
- * reservas en todos los estados (pendiente sin pago, pago por confirmar,
- * pagada, cancelada, quincenal), una rutina, un profe en la sede, un socio
+ * Carga un admin, un profe y seis socios, cuatro clases con sus horarios de
+ * varios días, tres planes mensuales (uno por clase, uno combinado y uno
+ * completo), socios con plan al día, en gracia y pedido desde la app, lugares
+ * fijos, reservas semanales en todos los estados (pendiente sin pago, pago por
+ * confirmar, pagada, cancelada), una rutina, un profe en la sede, un socio
  * dado de baja y algunos movimientos en el registro de actividad.
  *
  * Uso (PowerShell), desde gym-backend:
@@ -16,6 +18,8 @@
  * ⚠️ Pensado para una base de prueba. Todo lo que crea queda marcado: los
  *    usuarios con email @demo.local, y las clases con el profe de demo. El
  *    borrado se limita a eso y no toca socios, clases ni reservas reales.
+ *
+ *    Los planes de demo terminan en "(demo)" y se borran con el resto.
  *
  *    El admin de demo no usa una contraseña fija: se genera una al azar en
  *    cada carga y se muestra una sola vez. Así, si alguien lo corre por error
@@ -30,6 +34,7 @@ import { randomInt } from 'node:crypto'
 dotenv.config({ quiet: true })
 
 const MARCA = '@demo.local'
+const MARCA_PLAN = ' (demo)'
 const PASSWORD_DEMO = 'demo1234'
 const ZONA = 'America/Argentina/Buenos_Aires'
 
@@ -63,55 +68,64 @@ const SOCIOS = [
   { clave: 'tomas',     nombre: 'Tomás Aguirre',    dni: '90000016', telefono: '3510000016', baja: true }
 ]
 
+// Un horario tiene varios días con la misma hora (migración 013). `dias`:
+// 1 = lunes … 7 = domingo. El precio es el de la semana completa.
 const CLASES = [
   {
     clave: 'boxeo', nombre: 'Boxeo', rama: 'disciplina', duracion: 60,
     descripcion: 'Técnica, bolsa y guantes. Todos los niveles.',
     horarios: [
-      { clave: 'boxeo-lun', dia: 'Lunes',     inicio: '19:00', fin: '20:00', cupos: 15, precio: 8000 },
-      { clave: 'boxeo-mie', dia: 'Miércoles', inicio: '19:00', fin: '20:00', cupos: 15, precio: 8000 },
-      { clave: 'boxeo-vie', dia: 'Viernes',   inicio: '19:00', fin: '20:00', cupos: 15, precio: 8000 }
+      { clave: 'boxeo-lmv', dias: [1, 3, 5], inicio: '19:00', fin: '20:00', cupos: 15, precio: 15000 }
     ]
   },
   {
     clave: 'funcional', nombre: 'Funcional', rama: 'gimnasio', duracion: 60,
     descripcion: 'Circuitos de fuerza y resistencia.',
     horarios: [
-      { clave: 'func-mar', dia: 'Martes', inicio: '18:00', fin: '19:00', cupos: 20, precio: 6000 },
-      { clave: 'func-jue', dia: 'Jueves', inicio: '18:00', fin: '19:00', cupos: 20, precio: 6000 },
-      { clave: 'func-sab', dia: 'Sábado', inicio: '10:00', fin: '11:00', cupos: 20, precio: 6000 }
+      { clave: 'func-mj', dias: [2, 4], inicio: '18:00', fin: '19:00', cupos: 20, precio: 10000 },
+      { clave: 'func-sab', dias: [6], inicio: '10:00', fin: '11:00', cupos: 20, precio: 6000 }
     ]
   },
   {
     clave: 'muay', nombre: 'Muay Thai', rama: 'disciplina', duracion: 60,
     descripcion: 'Golpes, rodillas y codos. Traer vendas.',
     horarios: [
-      { clave: 'muay-lun', dia: 'Lunes',  inicio: '20:00', fin: '21:00', cupos: 12, precio: 9000 },
-      { clave: 'muay-jue', dia: 'Jueves', inicio: '20:00', fin: '21:00', cupos: 12, precio: 9000 }
+      { clave: 'muay-lj', dias: [1, 4], inicio: '20:00', fin: '21:00', cupos: 12, precio: 14000 }
     ]
   },
   {
     clave: 'nutri', nombre: 'Consulta de nutrición', rama: 'profesional', duracion: 45,
     descripcion: 'Plan de alimentación según tu objetivo.',
     horarios: [
-      { clave: 'nutri-mie', dia: 'Miércoles', inicio: '17:00', fin: '17:45', cupos: 4, precio: 12000 }
+      { clave: 'nutri-mie', dias: [3], inicio: '17:00', fin: '17:45', cupos: 4, precio: 12000 }
     ]
   }
 ]
 
-// `pago`: sin pago (null), pago registrado por el socio esperando confirmación
-// ('pendiente'), o confirmado por el gimnasio ('pagado').
-const RESERVAS = [
-  { socio: 'lucia',     horario: 'boxeo-lun', tipo: 'semanal',   estado: 'pendiente', pago: null },
-  { socio: 'martin',    horario: 'func-mar',  tipo: 'semanal',   estado: 'pendiente', pago: 'pendiente' },
-  { socio: 'sofia',     horario: 'muay-lun',  tipo: 'quincenal', estado: 'pagado',    pago: 'pagado' },
-  { socio: 'diego',     horario: 'boxeo-mie', tipo: 'semanal',   estado: 'cancelado', pago: null },
-  { socio: 'valentina', horario: 'func-sab',  tipo: 'semanal',   estado: 'pagado',    pago: 'pagado' },
-  { socio: 'valentina', horario: 'boxeo-vie', tipo: 'semanal',   estado: 'pendiente', pago: null }
+// Planes mensuales: qué clases incluye cada uno.
+const PLANES = [
+  { clave: 'boxeo', nombre: 'Boxeo', precio: 40000, clases: ['boxeo'] },
+  { clave: 'combo', nombre: 'Boxeo + Funcional', precio: 55000, clases: ['boxeo', 'funcional'] },
+  { clave: 'completo', nombre: 'Completo', precio: 70000, todo: true }
 ]
 
-const DIAS_POR_TIPO = { semanal: 7, quincenal: 14 }
-const MULTIPLICADOR = { semanal: 1, quincenal: 2 }
+// Socios con plan. `vence` en días desde hoy (negativo: ya venció). `pedido`:
+// lo pidió desde la app y todavía no lo pagó.
+const CON_PLAN = [
+  { socio: 'lucia', plan: 'boxeo', vence: 20, fijos: ['boxeo-lmv'] },
+  { socio: 'martin', plan: 'combo', vence: -2, fijos: ['boxeo-lmv', 'func-mj'] },
+  { socio: 'sofia', pedido: 'completo' }
+]
+
+// Semanales. `pago`: sin pago (null), pago registrado por el socio esperando
+// confirmación ('pendiente'), o confirmado por el gimnasio ('pagado').
+const RESERVAS = [
+  { socio: 'diego',     horario: 'boxeo-lmv', estado: 'cancelado', pago: null },
+  { socio: 'diego',     horario: 'muay-lj',   estado: 'pendiente', pago: 'pendiente' },
+  { socio: 'sofia',     horario: 'muay-lj',   estado: 'pagado',    pago: 'pagado' },
+  { socio: 'valentina', horario: 'func-sab',  estado: 'pagado',    pago: 'pagado' },
+  { socio: 'valentina', horario: 'boxeo-lmv', estado: 'pendiente', pago: null }
+]
 
 // ─── Utilidades ──────────────────────────────────────────────────────────
 
@@ -156,6 +170,13 @@ async function cargar(cliente) {
   const hayTurnos    = await existeTabla(cliente, 'turnos_profe')
   const hayAuditoria = await existeTabla(cliente, 'auditoria')
 
+  // Los horarios de varios días y los planes son de la migración 013: sin
+  // ella la carga fallaría a mitad de camino.
+  if (!(await existeTabla(cliente, 'planes'))) {
+    console.error('\n✖ A esta base le falta la migración 013 (planes y horarios de varios días).\n')
+    process.exit(1)
+  }
+
   const hashDemo = await bcrypt.hash(PASSWORD_DEMO, 10)
   const passwordAdmin = passwordAlAzar()
   const hashAdmin = await bcrypt.hash(passwordAdmin, 10)
@@ -183,6 +204,8 @@ async function cargar(cliente) {
     }
   }
 
+  const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+  const clases = {}
   const horarios = {}
   for (const c of CLASES) {
     const { rows } = await cliente.query(
@@ -190,14 +213,28 @@ async function cargar(cliente) {
        VALUES ($1, $2, $3, $4, $5) RETURNING id`,
       [c.nombre, c.rama, idProfe, c.descripcion, c.duracion]
     )
+    clases[c.clave] = rows[0].id
     for (const h of c.horarios) {
+      // dia_semana guarda el primer día: solo lo lee el backend anterior.
       const creado = await cliente.query(
         `INSERT INTO horarios
-         (clase_id, dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio)
-         VALUES ($1, $2, $3, $4, $5, $5, $6) RETURNING id, precio`,
-        [rows[0].id, h.dia, h.inicio, h.fin, h.cupos, h.precio]
+         (clase_id, dias, dia_semana, hora_inicio, hora_fin, cupos_totales, cupos_disponibles, precio)
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7) RETURNING id, precio`,
+        [rows[0].id, h.dias, DIAS[h.dias[0] - 1], h.inicio, h.fin, h.cupos, h.precio]
       )
       horarios[h.clave] = creado.rows[0]
+    }
+  }
+
+  const planes = {}
+  for (const p of PLANES) {
+    const { rows } = await cliente.query(
+      `INSERT INTO planes (nombre, precio, incluye_todo) VALUES ($1, $2, $3) RETURNING id`,
+      [p.nombre + MARCA_PLAN, p.precio, Boolean(p.todo)]
+    )
+    planes[p.clave] = rows[0].id
+    for (const c of p.clases ?? []) {
+      await cliente.query('INSERT INTO plan_clases (plan_id, clase_id) VALUES ($1, $2)', [rows[0].id, clases[c]])
     }
   }
 
@@ -207,15 +244,35 @@ async function cargar(cliente) {
     [ZONA]
   )
 
+  for (const s of CON_PLAN) {
+    if (s.pedido) {
+      await cliente.query(
+        'UPDATE usuarios SET plan_pedido_id = $1, plan_pedido_at = now() WHERE id = $2',
+        [planes[s.pedido], socios[s.socio]]
+      )
+      continue
+    }
+    await cliente.query(
+      'UPDATE usuarios SET plan_id = $1, cuota_vence = $2::date + $3::int WHERE id = $4',
+      [planes[s.plan], hoy, s.vence, socios[s.socio]]
+    )
+    for (const f of s.fijos) {
+      await cliente.query(
+        'INSERT INTO reservas_fijas (usuario_id, horario_id) VALUES ($1, $2)',
+        [socios[s.socio], horarios[f].id]
+      )
+    }
+  }
+
   const reservas = []
   for (const r of RESERVAS) {
     const horario = horarios[r.horario]
-    const total = Number(horario.precio) * MULTIPLICADOR[r.tipo]
+    const total = Number(horario.precio)
 
     const { rows } = await cliente.query(
       `INSERT INTO reservas (usuario_id, horario_id, fecha_inicio, fecha_fin, tipo, total, estado)
-       VALUES ($1, $2, $3::date, $3::date + $4::int, $5, $6, $7) RETURNING id`,
-      [socios[r.socio], horario.id, hoy, DIAS_POR_TIPO[r.tipo], r.tipo, total, r.estado]
+       VALUES ($1, $2, $3::date, $3::date + 7, 'semanal', $4, $5) RETURNING id`,
+      [socios[r.socio], horario.id, hoy, total, r.estado]
     )
     reservas.push({ ...r, id: rows[0].id, total })
 
@@ -226,16 +283,6 @@ async function cargar(cliente) {
       )
     }
   }
-
-  // Los cupos quedan coherentes con las reservas que no están canceladas.
-  await cliente.query(
-    `UPDATE horarios h
-     SET cupos_disponibles = h.cupos_totales - (
-       SELECT COUNT(*) FROM reservas r WHERE r.horario_id = h.id AND r.estado <> 'cancelado'
-     )
-     WHERE h.id = ANY($1)`,
-    [Object.values(horarios).map(h => h.id)]
-  )
 
   // Una rutina, para que la pantalla de rutinas no quede vacía.
   const rutina = await cliente.query(
@@ -286,7 +333,8 @@ async function cargar(cliente) {
   console.log(`   Profe:  ${PROFE.email}  ·  contraseña: ${PASSWORD_DEMO}`)
   console.log(`   Socios: lucia, martin, sofia, diego, valentina${MARCA}  ·  contraseña: ${PASSWORD_DEMO}`)
   console.log(`   Baja:   tomas${MARCA} (no puede entrar)\n`)
-  console.log(`   ${CLASES.length} clases, ${Object.keys(horarios).length} horarios, ${reservas.length} reservas.`)
+  console.log('   Planes: lucia al día con Boxeo, martin en gracia con Boxeo + Funcional, sofia pidió Completo.')
+  console.log(`   ${CLASES.length} clases, ${Object.keys(horarios).length} horarios, ${PLANES.length} planes, ${reservas.length} semanales.`)
 
   const faltan = [
     !hayBaja && 'la baja de usuarios',
@@ -337,17 +385,26 @@ async function borrar(cliente) {
     process.exit(1)
   }
 
-  // Un usuario de demo que reservó una clase real le devuelve el cupo.
+  // Lo mismo con los lugares fijos: uno de un socio real en una clase de demo
+  // frena el borrado.
+  const { rows: fijosAjenos } = await cliente.query(
+    `SELECT COUNT(*)::int AS total FROM reservas_fijas
+     WHERE horario_id = ANY($1) AND NOT (usuario_id = ANY($2))`,
+    [idsHorarios, usuarios]
+  )
+  if (fijosAjenos[0].total > 0) {
+    await cliente.query('ROLLBACK')
+    console.error(
+      `\n✖ Hay ${fijosAjenos[0].total} lugar(es) fijo(s) de socios reales en clases de demo.` +
+      '\n  No se borró nada. Revisalos antes de volver a intentar.\n'
+    )
+    process.exit(1)
+  }
+  await cliente.query('DELETE FROM reservas_fijas WHERE usuario_id = ANY($1)', [usuarios])
+  await cliente.query('DELETE FROM pagos_cuota WHERE usuario_id = ANY($1)', [usuarios])
   await cliente.query(
-    `UPDATE horarios h
-     SET cupos_disponibles = LEAST(h.cupos_disponibles + r.cantidad, h.cupos_totales)
-     FROM (
-       SELECT horario_id, COUNT(*) AS cantidad FROM reservas
-       WHERE usuario_id = ANY($1) AND estado <> 'cancelado' AND NOT (horario_id = ANY($2))
-       GROUP BY horario_id
-     ) r
-     WHERE h.id = r.horario_id`,
-    [usuarios, idsHorarios]
+    'UPDATE usuarios SET plan_id = NULL, plan_pedido_id = NULL WHERE id = ANY($1)',
+    [usuarios]
   )
 
   const { rows: reservas } = await cliente.query(
@@ -379,6 +436,12 @@ async function borrar(cliente) {
   // Los horarios se van en cascada con la clase; los turnos, con el usuario.
   await cliente.query('DELETE FROM clases WHERE id = ANY($1)', [idsClases])
   await cliente.query('DELETE FROM usuarios WHERE id = ANY($1)', [usuarios])
+  // Un plan de demo que tomó un socio real no se puede borrar: queda.
+  await cliente.query(
+    `DELETE FROM planes p WHERE p.nombre LIKE $1
+     AND NOT EXISTS (SELECT 1 FROM usuarios u WHERE u.plan_id = p.id)`,
+    [`%${MARCA_PLAN}`]
+  )
 
   await cliente.query('COMMIT')
 
